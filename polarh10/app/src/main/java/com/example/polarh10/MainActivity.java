@@ -13,10 +13,14 @@ import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.util.Log;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
@@ -36,9 +40,27 @@ public class MainActivity extends Activity {
     private Button connectButton;
     private Button disconnectButton;
     
+    // Timer treningowy
+    private TextView currentTimeText;
+    private TextView workoutTimerText;
+    private TextView workoutTimeSelection;
+    private Button minusButton;
+    private Button plusButton;
+    private Button startWorkoutButton;
+    private Button stopWorkoutButton;
+    
     private BluetoothGatt bluetoothGatt;
     private Handler handler = new Handler();
     private int currentHeartRate = 0;
+    
+    // Zmienne timera
+    private int selectedWorkoutMinutes = 15;  // domyślnie 15 minut
+    private int workoutTimeLeftSeconds = 0;   // pozostały czas w sekundach 
+    private int countdownSeconds = 0;         // odliczanie 10-sekund CrossFit
+    private boolean isWorkoutActive = false;
+    private boolean isCountdownActive = false;
+    private boolean isStopPressed = false;
+    private int stopPressCounter = 0;
     
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -51,6 +73,13 @@ public class MainActivity extends Activity {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
         layout.setPadding(50, 50, 50, 50);
+        
+        // Aktualny czas rzeczywisty
+        currentTimeText = new TextView(this);
+        updateCurrentTime();
+        currentTimeText.setTextSize(16);
+        currentTimeText.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        layout.addView(currentTimeText);
         
         // Tytuł
         TextView titleText = new TextView(this);
@@ -98,7 +127,89 @@ public class MainActivity extends Activity {
         });
         layout.addView(disconnectButton);
         
+        // SEPARATOR
+        TextView separatorText = new TextView(this);
+        separatorText.setText("\n⏱️ TIMER TRENINGOWY");
+        separatorText.setTextSize(20);
+        separatorText.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        layout.addView(separatorText);
+        
+        // Wybór czasu treningu
+        LinearLayout timeSelectionLayout = new LinearLayout(this);
+        timeSelectionLayout.setOrientation(LinearLayout.HORIZONTAL);
+        
+        minusButton = new Button(this);
+        minusButton.setText("➖");
+        minusButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                adjustWorkoutTime(-15);
+            }
+        });
+        timeSelectionLayout.addView(minusButton);
+        
+        workoutTimeSelection = new TextView(this);
+        workoutTimeSelection.setText(selectedWorkoutMinutes + " min");
+        workoutTimeSelection.setTextSize(18);
+        workoutTimeSelection.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        workoutTimeSelection.setPadding(30, 20, 30, 20);
+        timeSelectionLayout.addView(workoutTimeSelection);
+        
+        plusButton = new Button(this);
+        plusButton.setText("➕");
+        plusButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                adjustWorkoutTime(15);
+            }
+        });
+        timeSelectionLayout.addView(plusButton);
+        
+        layout.addView(timeSelectionLayout);
+        
+        // Timer treningu
+        workoutTimerText = new TextView(this);
+        workoutTimerText.setText("Gotowy do treningu!");
+        workoutTimerText.setTextSize(24);
+        workoutTimerText.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        layout.addView(workoutTimerText);
+        
+        // Przycisk START
+        startWorkoutButton = new Button(this);
+        startWorkoutButton.setText("🏃‍♂️ START TRENINGU");
+        startWorkoutButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startWorkoutCountdown();
+            }
+        });
+        layout.addView(startWorkoutButton);
+        
+        // Przycisk STOP z zabezpieczeniem
+        stopWorkoutButton = new Button(this);
+        stopWorkoutButton.setText("🛑 STOP (przytrzymaj 5s)");
+        stopWorkoutButton.setEnabled(false);
+        stopWorkoutButton.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        startStopTimer();
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        cancelStopTimer();
+                        return true;
+                }
+                return false;
+            }
+        });
+        layout.addView(stopWorkoutButton);
+        
         setContentView(layout);
+        
+        // Uruchom timer aktualizacji czasu
+        startTimeUpdateTimer();
         
         Log.d(TAG, "Aplikacja uruchomiona - gotowa do łączenia z " + POLAR_H10_MAC);
     }
@@ -280,6 +391,178 @@ public class MainActivity extends Activity {
         
         Log.d(TAG, "📊 Parsed HR data: format=" + format + ", heartRate=" + heartRate);
         return heartRate;
+    }
+    
+    // ===== METODY TIMERA TRENINGOWEGO =====
+    
+    private void updateCurrentTime() {
+        SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
+        String currentTime = sdf.format(new Date());
+        if (currentTimeText != null) {
+            currentTimeText.setText("🕐 " + currentTime);
+        }
+    }
+    
+    private void startTimeUpdateTimer() {
+        handler.post(new Runnable() {
+            @Override
+            public void run() {
+                updateCurrentTime();
+                handler.postDelayed(this, 1000); // aktualizacja co sekundę
+            }
+        });
+    }
+    
+    private void adjustWorkoutTime(int deltaMinutes) {
+        if (!isWorkoutActive && !isCountdownActive) {
+            selectedWorkoutMinutes += deltaMinutes;
+            if (selectedWorkoutMinutes < 5) selectedWorkoutMinutes = 5;   // min 5 minut
+            if (selectedWorkoutMinutes > 120) selectedWorkoutMinutes = 120; // max 2 godziny
+            
+            workoutTimeSelection.setText(selectedWorkoutMinutes + " min");
+            Log.d(TAG, "⏱️ Wybrano czas treningu: " + selectedWorkoutMinutes + " minut");
+        }
+    }
+    
+    private void startWorkoutCountdown() {
+        if (isWorkoutActive || isCountdownActive) return;
+        
+        Log.d(TAG, "🏃‍♂️ Rozpoczynam odliczanie CrossFit (10 sekund)");
+        isCountdownActive = true;
+        countdownSeconds = 10;
+        
+        // Wyłącz przyciski wyboru czasu
+        minusButton.setEnabled(false);
+        plusButton.setEnabled(false);
+        startWorkoutButton.setEnabled(false);
+        
+        // Rozpocznij odliczanie
+        countdownTick();
+    }
+    
+    private void countdownTick() {
+        if (countdownSeconds > 0) {
+            workoutTimerText.setText("START za: " + countdownSeconds);
+            countdownSeconds--;
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    countdownTick();
+                }
+            }, 1000);
+        } else {
+            // Koniec odliczania - rozpocznij trening!
+            workoutTimerText.setText("🔥 GO! 🔥");
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    startActualWorkout();
+                }
+            }, 500);
+        }
+    }
+    
+    private void startActualWorkout() {
+        Log.d(TAG, "🔥 TRENING ROZPOCZĘTY - " + selectedWorkoutMinutes + " minut");
+        isCountdownActive = false;
+        isWorkoutActive = true;
+        workoutTimeLeftSeconds = selectedWorkoutMinutes * 60;
+        
+        // Włącz przycisk STOP
+        stopWorkoutButton.setEnabled(true);
+        
+        // Rozpocznij timer treningu
+        workoutTick();
+    }
+    
+    private void workoutTick() {
+        if (isWorkoutActive && workoutTimeLeftSeconds > 0) {
+            int minutes = workoutTimeLeftSeconds / 60;
+            int seconds = workoutTimeLeftSeconds % 60;
+            
+            workoutTimerText.setText(String.format("⏱️ TRENING: %02d:%02d", minutes, seconds));
+            workoutTimeLeftSeconds--;
+            
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    workoutTick();
+                }
+            }, 1000);
+        } else if (isWorkoutActive) {
+            // Koniec treningu!
+            finishWorkout();
+        }
+    }
+    
+    private void startStopTimer() {
+        if (!isWorkoutActive) return;
+        
+        isStopPressed = true;
+        stopPressCounter = 5;
+        stopWorkoutButton.setText("🛑 STOP " + stopPressCounter + "s");
+        
+        stopTimerTick();
+    }
+    
+    private void stopTimerTick() {
+        if (isStopPressed && stopPressCounter > 0) {
+            stopPressCounter--;
+            stopWorkoutButton.setText("🛑 STOP " + stopPressCounter + "s");
+            
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    stopTimerTick();
+                }
+            }, 1000);
+        } else if (isStopPressed && stopPressCounter == 0) {
+            // Zatrzymaj trening
+            stopWorkout();
+        }
+    }
+    
+    private void cancelStopTimer() {
+        if (isStopPressed) {
+            isStopPressed = false;
+            stopWorkoutButton.setText("🛑 STOP (przytrzymaj 5s)");
+            Log.d(TAG, "⚠️ Anulowano zatrzymanie treningu");
+        }
+    }
+    
+    private void stopWorkout() {
+        Log.d(TAG, "🛑 TRENING ZATRZYMANY przez użytkownika");
+        isWorkoutActive = false;
+        isStopPressed = false;
+        
+        resetWorkoutUI();
+    }
+    
+    private void finishWorkout() {
+        Log.d(TAG, "✅ TRENING ZAKOŃCZONY - czas minął!");
+        isWorkoutActive = false;
+        
+        workoutTimerText.setText("🎉 TRENING SKOŃCZONY! 🎉");
+        
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                resetWorkoutUI();
+            }
+        }, 3000);
+    }
+    
+    private void resetWorkoutUI() {
+        // Przywróć interfejs do stanu początkowego
+        workoutTimerText.setText("Gotowy do treningu!");
+        stopWorkoutButton.setText("🛑 STOP (przytrzymaj 5s)");
+        
+        minusButton.setEnabled(true);
+        plusButton.setEnabled(true);
+        startWorkoutButton.setEnabled(true);
+        stopWorkoutButton.setEnabled(false);
+        
+        Log.d(TAG, "🔄 Interface zurückgesetzt für nächstes Training");
     }
     
     @Override
