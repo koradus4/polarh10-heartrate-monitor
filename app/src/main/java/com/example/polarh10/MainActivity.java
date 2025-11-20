@@ -36,6 +36,10 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import android.os.Environment;
+import android.os.PowerManager;
+import android.content.Context;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.Color;
 
 public class MainActivity extends Activity {
     
@@ -49,6 +53,7 @@ public class MainActivity extends Activity {
     private static final String CLIENT_CHARACTERISTIC_CONFIG_UUID = "00002902-0000-1000-8000-00805f9b34fb";
     
     private TextView statusText;
+    private TextView gpsStatusText;
     private TextView heartRateText;
     private Button connectButton;
     
@@ -72,6 +77,7 @@ public class MainActivity extends Activity {
     private Button startWorkoutButton;
     private Button stopWorkoutButton;
     private Button runningWorkoutButton;
+    private Button closeAppButton;
     private LinearLayout mainLayout;
     
     private BluetoothGatt bluetoothGatt;
@@ -92,11 +98,26 @@ public class MainActivity extends Activity {
     private boolean isStopPressed = false;
     private int stopPressCounter = 0;
     
+    // Zabezpieczenie przycisku rozłącz - przytrzymanie 5s
+    private boolean isDisconnectPressActive = false;
+    private long disconnectPressStartTime = 0;
+    
+    // Zabezpieczenie przycisku zatrzymaj trening biegowy - przytrzymanie 5s
+    private boolean isStopRunningPressActive = false;
+    private long stopRunningPressStartTime = 0;
+    
+    // Zabezpieczenie przycisku zamknij - przytrzymanie 5s
+    private boolean isClosePressActive = false;
+    private long closePressStartTime = 0;
+    
     // TTS i Audio
     private TextToSpeech tts;
     private AudioManager audioManager;
     private int originalVolume = -1; // Zapis pierwotnej głośności
     private boolean isTtsReady = false;
+    
+    // WakeLock - utrzymuje CPU włączony podczas treningu
+    private PowerManager.WakeLock wakeLock;
     
     // Trening biegowy - GPS i tracking
     private LocationManager locationManager;
@@ -125,6 +146,11 @@ public class MainActivity extends Activity {
         originalVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
         Log.d(TAG, "📱 URUCHOMIENIE: Zapisano pierwotną głośność: " + originalVolume);
         
+        // Inicjalizacja WakeLock
+        PowerManager powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PolarH10::WorkoutWakeLock");
+        Log.d(TAG, "🔋 WakeLock zainicjalizowany");
+        
         // Tworzę ScrollView + LinearLayout dla przewijania
         ScrollView scrollView = new ScrollView(this);
         mainLayout = new LinearLayout(this);
@@ -150,11 +176,17 @@ public class MainActivity extends Activity {
         macText.setTextSize(14);
         mainLayout.addView(macText);
         
-        // Status
+        // Status Polar
         statusText = new TextView(this);
-        statusText.setText("Status: Nie połączono");
-        statusText.setTextSize(18);
+        statusText.setText("Polar: Nie połączono");
+        statusText.setTextSize(16);
         mainLayout.addView(statusText);
+        
+        // Status GPS
+        gpsStatusText = new TextView(this);
+        gpsStatusText.setText("GPS: Sprawdzam...");
+        gpsStatusText.setTextSize(16);
+        mainLayout.addView(gpsStatusText);
         
         // Tętno
         heartRateText = new TextView(this);
@@ -165,10 +197,40 @@ public class MainActivity extends Activity {
         // Przycisk połącz/rozłącz
         connectButton = new Button(this);
         connectButton.setText("🎯 POŁĄCZ");
-        connectButton.setOnClickListener(new View.OnClickListener() {
+        GradientDrawable connectGradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        connectGradient.setCornerRadius(30);
+        connectButton.setBackground(connectGradient);
+        connectButton.setTextColor(0xFFFFFFFF);
+        connectButton.setOnTouchListener(new View.OnTouchListener() {
             @Override
-            public void onClick(View v) {
-                toggleConnection();
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        if (bluetoothGatt != null) {
+                            // Połączony - rozpocznij licznik rozłączania
+                            isDisconnectPressActive = true;
+                            disconnectPressStartTime = System.currentTimeMillis();
+                            handler.post(disconnectCountdownRunnable);
+                        } else {
+                            // Nie połączony - natychmiastowe połączenie
+                            toggleConnection();
+                        }
+                        return true;
+                        
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        if (isDisconnectPressActive) {
+                            // Przerwano przytrzymanie
+                            isDisconnectPressActive = false;
+                            handler.removeCallbacks(disconnectCountdownRunnable);
+                            connectButton.setText("🔌 ROZŁĄCZ");
+                        }
+                        return true;
+                }
+                return false;
             }
         });
         mainLayout.addView(connectButton);
@@ -183,6 +245,13 @@ public class MainActivity extends Activity {
         // Przycisk wyboru typu timera
         timerTypeButton = new Button(this);
         timerTypeButton.setText("🏆 Timer Treningowy ▼");
+        GradientDrawable timerTypeGradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        timerTypeGradient.setCornerRadius(30);
+        timerTypeButton.setBackground(timerTypeGradient);
+        timerTypeButton.setTextColor(0xFFFFFFFF);
         timerTypeButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -214,6 +283,13 @@ public class MainActivity extends Activity {
         
         workoutMinusButton = new Button(this);
         workoutMinusButton.setText("➖");
+        GradientDrawable workoutMinusGradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        workoutMinusGradient.setCornerRadius(30);
+        workoutMinusButton.setBackground(workoutMinusGradient);
+        workoutMinusButton.setTextColor(0xFFFFFFFF);
         workoutMinusButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -230,6 +306,13 @@ public class MainActivity extends Activity {
         
         workoutPlusButton = new Button(this);
         workoutPlusButton.setText("➕");
+        GradientDrawable workoutPlusGradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        workoutPlusGradient.setCornerRadius(30);
+        workoutPlusButton.setBackground(workoutPlusGradient);
+        workoutPlusButton.setTextColor(0xFFFFFFFF);
         workoutPlusButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -249,6 +332,13 @@ public class MainActivity extends Activity {
         
         restMinusButton = new Button(this);
         restMinusButton.setText("➖");
+        GradientDrawable restMinusGradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        restMinusGradient.setCornerRadius(30);
+        restMinusButton.setBackground(restMinusGradient);
+        restMinusButton.setTextColor(0xFFFFFFFF);
         restMinusButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -267,6 +357,13 @@ public class MainActivity extends Activity {
         
         restPlusButton = new Button(this);
         restPlusButton.setText("➕");
+        GradientDrawable restPlusGradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        restPlusGradient.setCornerRadius(30);
+        restPlusButton.setBackground(restPlusGradient);
+        restPlusButton.setTextColor(0xFFFFFFFF);
         restPlusButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -286,6 +383,13 @@ public class MainActivity extends Activity {
         
         roundsMinusButton = new Button(this);
         roundsMinusButton.setText("➖");
+        GradientDrawable roundsMinusGradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        roundsMinusGradient.setCornerRadius(30);
+        roundsMinusButton.setBackground(roundsMinusGradient);
+        roundsMinusButton.setTextColor(0xFFFFFFFF);
         roundsMinusButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -302,6 +406,13 @@ public class MainActivity extends Activity {
         
         roundsPlusButton = new Button(this);
         roundsPlusButton.setText("➕");
+        GradientDrawable roundsPlusGradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        roundsPlusGradient.setCornerRadius(30);
+        roundsPlusButton.setBackground(roundsPlusGradient);
+        roundsPlusButton.setTextColor(0xFFFFFFFF);
         roundsPlusButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -320,56 +431,89 @@ public class MainActivity extends Activity {
         workoutTimerText.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
         mainLayout.addView(workoutTimerText);
         
-        // Przycisk START
+        // Przycisk START/STOP połączony
         startWorkoutButton = new Button(this);
         startWorkoutButton.setText("🏃‍♂️ START TRENINGU");
-        startWorkoutButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startWorkoutCountdown();
-            }
-        });
-        mainLayout.addView(startWorkoutButton);
-        
-        // Przycisk STOP z zabezpieczeniem
-        stopWorkoutButton = new Button(this);
-        stopWorkoutButton.setText("🛑 STOP (przytrzymaj 5s)");
-        stopWorkoutButton.setEnabled(false);
-        stopWorkoutButton.setOnTouchListener(new View.OnTouchListener() {
+        GradientDrawable startGradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        startGradient.setCornerRadius(30);
+        startWorkoutButton.setBackground(startGradient);
+        startWorkoutButton.setTextColor(0xFFFFFFFF);
+        startWorkoutButton.setOnTouchListener(new View.OnTouchListener() {
             @Override
             public boolean onTouch(View v, MotionEvent event) {
                 switch (event.getAction()) {
                     case MotionEvent.ACTION_DOWN:
-                        startStopTimer();
+                        if (!isWorkoutActive && !isCountdownActive) {
+                            // Trening nieaktywny - start natychmiast
+                            startWorkoutCountdown();
+                        } else {
+                            // Trening aktywny - przytrzymaj 5s do zatrzymania
+                            startStopTimer();
+                        }
                         return true;
                     case MotionEvent.ACTION_UP:
                     case MotionEvent.ACTION_CANCEL:
-                        cancelStopTimer();
+                        if (isWorkoutActive || isCountdownActive) {
+                            cancelStopTimer();
+                        }
                         return true;
                 }
                 return false;
             }
         });
-        mainLayout.addView(stopWorkoutButton);
+        mainLayout.addView(startWorkoutButton);
+        
+        // Ukryty stopWorkoutButton - używany wewnętrznie
+        stopWorkoutButton = new Button(this);
+        stopWorkoutButton.setVisibility(View.GONE);
         
         // Przycisk TRENING BIEGOWY - będzie dodawany dynamicznie
         createRunningWorkoutButton();
         
         // Przycisk zamknij aplikację
-        Button closeAppButton = new Button(this);
+        closeAppButton = new Button(this);
         closeAppButton.setText("🚺 ZAMKNIJ");
         closeAppButton.setTextSize(12);
-        closeAppButton.setBackgroundColor(0xFFFF4444); // Czerwony
+        
+        // Gradient panterka wojskowa - zaokrąglony
+        GradientDrawable closeButtonDrawable = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{
+                Color.parseColor("#3d4a2c"), // Ciemnozielony
+                Color.parseColor("#5a6b47"), // Średni zielony
+                Color.parseColor("#3d4a2c")  // Ciemnozielony
+            }
+        );
+        closeButtonDrawable.setShape(GradientDrawable.RECTANGLE);
+        closeButtonDrawable.setCornerRadius(30); // Zaokrąglone rogi
+        closeAppButton.setBackground(closeButtonDrawable);
+        
         closeAppButton.setTextColor(0xFFFFFFFF); // Biały tekst
         LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, 120);
         closeParams.setMargins(0, 20, 0, 0);
         closeAppButton.setLayoutParams(closeParams);
-        closeAppButton.setOnClickListener(new View.OnClickListener() {
+        closeAppButton.setOnTouchListener(new View.OnTouchListener() {
             @Override
-            public void onClick(View v) {
-                Log.d(TAG, "🚺 Zamykanie aplikacji przez użytkownika");
-                finish(); // Zamyka aplikację i wywoła onDestroy()
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        isClosePressActive = true;
+                        closePressStartTime = System.currentTimeMillis();
+                        handler.post(closeCountdownRunnable);
+                        return true;
+                        
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        isClosePressActive = false;
+                        handler.removeCallbacks(closeCountdownRunnable);
+                        closeAppButton.setText("🚺 ZAMKNIJ");
+                        return true;
+                }
+                return false;
             }
         });
         mainLayout.addView(closeAppButton);
@@ -382,6 +526,14 @@ public class MainActivity extends Activity {
         startTimeUpdateTimer();
         
         Log.d(TAG, "Aplikacja uruchomiona - gotowa do łączenia z " + POLAR_H10_MAC);
+        
+        // AUTO-CONNECT: Połącz z Polar H10 i inicjalizuj GPS automatycznie
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                autoConnectPolarAndGPS();
+            }
+        }, 1000); // Odczekaj 1s na inicjalizację UI
     }
     
     private void requestBluetoothPermissions() {
@@ -397,6 +549,50 @@ public class MainActivity extends Activity {
         Log.d(TAG, "🔐 Proszę o uprawnienia Bluetooth");
     }
     
+    private void autoConnectPolarAndGPS() {
+        Log.d(TAG, "🚀 AUTO-CONNECT: Rozpoczynam automatyczne połączenia...");
+        
+        // 1. Połącz z Polar H10
+        connectToPolar();
+        
+        // 2. Inicjalizuj GPS (sprawdzenie czy włączony)
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                checkGPSStatus();
+            }
+        }, 2000); // Poczekaj 2s na połączenie Polar
+    }
+    
+    private void checkGPSStatus() {
+        LocationManager locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        
+        if (locationManager != null && locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            Log.d(TAG, "✅ GPS włączony");
+            gpsStatusText.setText("GPS: ✅ Włączony");
+            // Komunikat głosowy - tylko że włączony, nie "gotowy"
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    if (isTtsReady) {
+                        speak("GPS włączony");
+                    }
+                }
+            }, 500);
+        } else {
+            Log.w(TAG, "⚠️ GPS wyłączony");
+            gpsStatusText.setText("GPS: ❌ Wyłączony");
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    if (isTtsReady) {
+                        speak("Ostrzeżenie. GPS nie jest włączony. Włącz GPS w ustawieniach.");
+                    }
+                }
+            }, 500);
+        }
+    }
+    
     private void toggleConnection() {
         if (bluetoothGatt != null) {
             // Już połączony - rozłącz
@@ -407,15 +603,95 @@ public class MainActivity extends Activity {
         }
     }
     
+    // Runnable do odliczania 5s przed rozłączeniem
+    private Runnable disconnectCountdownRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!isDisconnectPressActive) {
+                return;
+            }
+            
+            long elapsedTime = System.currentTimeMillis() - disconnectPressStartTime;
+            long remainingTime = 5000 - elapsedTime;
+            
+            if (remainingTime <= 0) {
+                // 5 sekund upłynęło - rozłącz
+                isDisconnectPressActive = false;
+                disconnectFromPolar();
+            } else {
+                // Aktualizuj tekst przycisku
+                int secondsLeft = (int) Math.ceil(remainingTime / 1000.0);
+                connectButton.setText("⏱️ PRZYTRZYMAJ " + secondsLeft + "s");
+                handler.postDelayed(this, 100);
+            }
+        }
+    };
+    
+    // Runnable do odliczania 5s przed zatrzymaniem treningu biegowego
+    private Runnable stopRunningCountdownRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!isStopRunningPressActive) {
+                return;
+            }
+            
+            long elapsedTime = System.currentTimeMillis() - stopRunningPressStartTime;
+            long remainingTime = 5000 - elapsedTime;
+            
+            if (remainingTime <= 0) {
+                // 5 sekund upłynęło - zatrzymaj trening
+                isStopRunningPressActive = false;
+                stopRunningWorkout();
+                runningWorkoutButton.setText("🏃‍♂️ TRENING BIEGOWY");
+                GradientDrawable greenGradient = new GradientDrawable(
+                    GradientDrawable.Orientation.TL_BR,
+                    new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+                );
+                greenGradient.setCornerRadius(30);
+                runningWorkoutButton.setBackground(greenGradient);
+            } else {
+                // Aktualizuj tekst przycisku
+                int secondsLeft = (int) Math.ceil(remainingTime / 1000.0);
+                runningWorkoutButton.setText("⏱️ PRZYTRZYMAJ " + secondsLeft + "s");
+                handler.postDelayed(this, 100);
+            }
+        }
+    };
+    
+    // Runnable do odliczania 5s przed zamknięciem aplikacji
+    private Runnable closeCountdownRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!isClosePressActive) {
+                return;
+            }
+            
+            long elapsedTime = System.currentTimeMillis() - closePressStartTime;
+            long remainingTime = 5000 - elapsedTime;
+            
+            if (remainingTime <= 0) {
+                // 5 sekund upłynęło - zamknij aplikację
+                isClosePressActive = false;
+                Log.d(TAG, "🚺 Zamykanie aplikacji przez użytkownika");
+                finish();
+            } else {
+                // Aktualizuj tekst przycisku
+                int secondsLeft = (int) Math.ceil(remainingTime / 1000.0);
+                closeAppButton.setText("⏱️ PRZYTRZYMAJ " + secondsLeft + "s");
+                handler.postDelayed(this, 100);
+            }
+        }
+    };
+    
     private void connectToPolar() {
         Log.d(TAG, "🎯 Próba połączenia z " + POLAR_H10_MAC);
-        statusText.setText("Status: Łączenie z Twoją opaską...");
+        statusText.setText("Polar: ⏳ Łączenie...");
         connectButton.setText("⏳ ŁĄCZENIE...");
         
         try {
             BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
             if (bluetoothAdapter == null) {
-                statusText.setText("Status: Błąd - brak Bluetooth");
+                statusText.setText("Polar: ❌ Błąd Bluetooth");
                 connectButton.setText("🎯 POŁĄCZ");
                 return;
             }
@@ -425,7 +701,7 @@ public class MainActivity extends Activity {
             
         } catch (Exception e) {
             Log.e(TAG, "Błąd łączenia: " + e.getMessage());
-            statusText.setText("Status: Błąd łączenia - " + e.getMessage());
+            statusText.setText("Polar: ❌ Błąd połączenia");
             connectButton.setText("🎯 POŁĄCZ");
         }
     }
@@ -439,7 +715,7 @@ public class MainActivity extends Activity {
             bluetoothGatt = null;
         }
         
-        statusText.setText("Status: Rozłączono");
+        statusText.setText("Polar: Rozłączono");
         heartRateText.setText("❤️ Tętno: 0 BPM");
         connectButton.setText("🎯 POŁĄCZ");
     }
@@ -453,7 +729,7 @@ public class MainActivity extends Activity {
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        statusText.setText("Status: ✅ POŁĄCZONO! Szukam serwisu HR...");
+                        statusText.setText("Polar: ✅ Połączono, szukam HR...");
                         connectButton.setText("❌ ROZŁĄCZ");
                     }
                 });
@@ -467,7 +743,7 @@ public class MainActivity extends Activity {
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        statusText.setText("Status: Rozłączono");
+                        statusText.setText("Polar: Rozłączono");
                         heartRateText.setText("❤️ Tętno: 0 BPM");
                         connectButton.setText("🎯 POŁĄCZ");
                     }
@@ -496,7 +772,16 @@ public class MainActivity extends Activity {
                         runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
-                                statusText.setText("Status: ✅ GOTOWE - odbieranie tętna!");
+                                statusText.setText("Polar: ✅ Gotowe - odbiera tętno");
+                                // Komunikat głosowy po potwierdzeniu połączenia
+                                handler.postDelayed(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        if (isTtsReady) {
+                                            speak("Połączono z paskiem Polar H10");
+                                        }
+                                    }
+                                }, 500);
                             }
                         });
                         
@@ -537,17 +822,17 @@ public class MainActivity extends Activity {
         
         @Override
         public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
-            // TO JEST PRAWDZIWE TĘTNO Z POLAR H10!
+            // Tętno z Polar H10
             if (HEART_RATE_MEASUREMENT_CHAR_UUID.equals(characteristic.getUuid().toString())) {
                 byte[] data = characteristic.getValue();
                 int heartRate = parseHeartRateValue(data);
                 
-                Log.d(TAG, "❤️ PRAWDZIWE TĘTNO: " + heartRate + " BPM");
+                Log.d(TAG, "❤️ Tętno: " + heartRate + " BPM");
                 
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        heartRateText.setText("❤️ PRAWDZIWE TĘTNO: " + heartRate + " BPM");
+                        heartRateText.setText("❤️ Tętno: " + heartRate + " BPM");
                         currentHeartRate = heartRate;
                         
                         // Aktualizuj statystyki treningu biegowego
@@ -621,7 +906,7 @@ public class MainActivity extends Activity {
         
         // Wyłącz przyciski ustawień
         timerTypeButton.setEnabled(false);
-        startWorkoutButton.setEnabled(false);
+        startWorkoutButton.setText("🛑 ZATRZYMAJ (przytrzymaj 5s)");
         
         // Rozpocznij odliczanie
         countdownTick();
@@ -663,6 +948,12 @@ public class MainActivity extends Activity {
         isCountdownActive = false;
         isWorkoutActive = true;
         
+        // Włącz WakeLock - utrzyma CPU włączony
+        if (wakeLock != null && !wakeLock.isHeld()) {
+            wakeLock.acquire();
+            Log.d(TAG, "🔋 WakeLock włączony - CPU pozostanie aktywny");
+        }
+        
         // Zapisz i zwiększ głośność na MAX
         originalVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
         int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
@@ -675,7 +966,7 @@ public class MainActivity extends Activity {
         workoutTimeLeftSeconds = workoutTimeMinutes * 60;
         
         // TTS start workout
-        speak("Praca! Runda 1");
+        speak("Work! Runda 1");
         
         // Włącz przycisk STOP
         stopWorkoutButton.setEnabled(true);
@@ -702,8 +993,8 @@ public class MainActivity extends Activity {
             } else {
                 // Normalne ostrzeżenia dla innych faz
                 if (workoutTimeLeftSeconds == 10) {
-                    String phaseTextTTS = isInWorkoutPhase ? "pracy" : "odpoczynku";
-                    speak("Dziesięć sekund " + phaseTextTTS);
+                    String phaseTextTTS = isInWorkoutPhase ? "do resta" : "Jeszcze 10 sekund resta";
+                    speak(isInWorkoutPhase ? "Dziesięć sekund " + phaseTextTTS : phaseTextTTS);
                 }
             }
             
@@ -737,7 +1028,7 @@ public class MainActivity extends Activity {
                 Log.d(TAG, "🔄 Przechodzę na REST - " + restTimeSeconds + "s");
                 
                 // TTS przejście na REST
-                speak("Odpoczynek! " + getPolishTime(restTimeSeconds));
+                speak("Rest! " + getPolishTime(restTimeSeconds));
                 
                 workoutTick();
             } else {
@@ -759,7 +1050,7 @@ public class MainActivity extends Activity {
             Log.d(TAG, "🔄 Runda " + currentRound + "/" + totalRounds);
             
             // TTS nowa runda
-            speak("Praca! Runda " + currentRound);
+            speak("Work! Runda " + currentRound);
             
             workoutTick();
         } else {
@@ -773,7 +1064,7 @@ public class MainActivity extends Activity {
         
         isStopPressed = true;
         stopPressCounter = 5;
-        stopWorkoutButton.setText("🛑 STOP " + stopPressCounter + "s");
+        startWorkoutButton.setText("🛑 ZATRZYMAJ " + stopPressCounter + "s");
         
         stopTimerTick();
     }
@@ -781,7 +1072,7 @@ public class MainActivity extends Activity {
     private void stopTimerTick() {
         if (isStopPressed && stopPressCounter > 0) {
             stopPressCounter--;
-            stopWorkoutButton.setText("🛑 STOP " + stopPressCounter + "s");
+            startWorkoutButton.setText("🛑 ZATRZYMAJ " + stopPressCounter + "s");
             
             handler.postDelayed(new Runnable() {
                 @Override
@@ -798,7 +1089,7 @@ public class MainActivity extends Activity {
     private void cancelStopTimer() {
         if (isStopPressed) {
             isStopPressed = false;
-            stopWorkoutButton.setText("🛑 STOP (przytrzymaj 5s)");
+            startWorkoutButton.setText("🛑 ZATRZYMAJ (przytrzymaj 5s)");
             Log.d(TAG, "⚠️ Anulowano zatrzymanie treningu");
         }
     }
@@ -807,6 +1098,12 @@ public class MainActivity extends Activity {
         Log.d(TAG, "🚫 TRENING ZATRZYMANY przez użytkownika");
         isWorkoutActive = false;
         isStopPressed = false;
+        
+        // Wyłącz WakeLock
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+            Log.d(TAG, "🔋 WakeLock wyłączony");
+        }
         
         // Przywróć pierwotną głośność
         if (originalVolume != -1) {
@@ -824,6 +1121,12 @@ public class MainActivity extends Activity {
     private void finishWorkout() {
         Log.d(TAG, "✅ TRENING ZAKOŃCZONY - czas minął!");
         isWorkoutActive = false;
+        
+        // Wyłącz WakeLock
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+            Log.d(TAG, "🔋 WakeLock wyłączony");
+        }
         
         // Przywróć pierwotną głośność
         if (originalVolume != -1) {
@@ -848,7 +1151,7 @@ public class MainActivity extends Activity {
     private void resetWorkoutUI() {
         // Przywróć interfejs do stanu początkowego
         workoutTimerText.setText("Gotowy do treningu!");
-        stopWorkoutButton.setText("🛑 STOP (przytrzymaj 5s)");
+        startWorkoutButton.setText("🏃‍♂️ START TRENINGU");
         
         // Reset zmiennych
         currentRound = 0;
@@ -856,8 +1159,6 @@ public class MainActivity extends Activity {
         
         // Włącz przyciski
         timerTypeButton.setEnabled(true);
-        startWorkoutButton.setEnabled(true);
-        stopWorkoutButton.setEnabled(false);
         
         Log.d(TAG, "🔄 Interface zurückgesetzt für nächstes Training");
     }
@@ -895,20 +1196,53 @@ public class MainActivity extends Activity {
     private void createRunningWorkoutButton() {
         runningWorkoutButton = new Button(this);
         runningWorkoutButton.setText("🏃‍♂️ TRENING BIEGOWY");
-        runningWorkoutButton.setBackgroundColor(0xFF4CAF50); // Zielony
+        GradientDrawable runningGradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        runningGradient.setCornerRadius(30);
+        runningWorkoutButton.setBackground(runningGradient);
         runningWorkoutButton.setTextColor(0xFFFFFFFF); // Biały tekst
-        runningWorkoutButton.setOnClickListener(new View.OnClickListener() {
+        runningWorkoutButton.setOnTouchListener(new View.OnTouchListener() {
             @Override
-            public void onClick(View v) {
-                if (isRunningWorkoutActive) {
-                    stopRunningWorkout();
-                    runningWorkoutButton.setText("🏃‍♂️ TRENING BIEGOWY");
-                    runningWorkoutButton.setBackgroundColor(0xFF4CAF50); // Zielony
-                } else {
-                    startRunningWorkout();
-                    runningWorkoutButton.setText("🛑 ZATRZYMAJ TRENING");
-                    runningWorkoutButton.setBackgroundColor(0xFFF44336); // Czerwony
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        if (isRunningWorkoutActive) {
+                            // Trening aktywny - rozpocznij licznik zatrzymania
+                            isStopRunningPressActive = true;
+                            stopRunningPressStartTime = System.currentTimeMillis();
+                            handler.post(stopRunningCountdownRunnable);
+                        } else {
+                            // Trening nieaktywny - natychmiastowy start
+                            startRunningWorkout();
+                            runningWorkoutButton.setText("🛑 ZATRZYMAJ TRENING");
+                            GradientDrawable redGradient = new GradientDrawable(
+                                GradientDrawable.Orientation.TL_BR,
+                                new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+                            );
+                            redGradient.setCornerRadius(30);
+                            runningWorkoutButton.setBackground(redGradient);
+                        }
+                        return true;
+                        
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        if (isStopRunningPressActive) {
+                            // Przerwano przytrzymanie
+                            isStopRunningPressActive = false;
+                            handler.removeCallbacks(stopRunningCountdownRunnable);
+                            runningWorkoutButton.setText("🛑 ZATRZYMAJ TRENING");
+                            GradientDrawable redGradient = new GradientDrawable(
+                                GradientDrawable.Orientation.TL_BR,
+                                new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+                            );
+                            redGradient.setCornerRadius(30);
+                            runningWorkoutButton.setBackground(redGradient);
+                        }
+                        return true;
                 }
+                return false;
             }
         });
         runningWorkoutButton.setVisibility(View.GONE); // Ukryty na start
@@ -1002,7 +1336,8 @@ public class MainActivity extends Activity {
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 
                 audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC), 0);
             
-            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null);
+            // QUEUE_ADD - dodaje do kolejki zamiast przerywać poprzedni komunikat
+            tts.speak(text, TextToSpeech.QUEUE_ADD, null, null);
             Log.d(TAG, "🔊 TTS: " + text);
         } else {
             Log.w(TAG, "⚠️ TTS nie gotowy: " + text);
@@ -1012,10 +1347,12 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
-        // Przywróć pierwotną głośność przy zamknięciu/minimalizacji
-        if (originalVolume != -1) {
+        // Przywróć pierwotną głośność TYLKO gdy trening NIE jest aktywny
+        if (!isWorkoutActive && !isRunningWorkoutActive && originalVolume != -1) {
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, originalVolume, 0);
             Log.d(TAG, "🔊 PAUSE: Głośność przywrócona do: " + originalVolume);
+        } else {
+            Log.d(TAG, "🔊 PAUSE: Trening aktywny - głośność nie zmieniona");
         }
     }
     
@@ -1023,6 +1360,12 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         disconnectFromPolar();
+        
+        // Zwolnij WakeLock
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+            Log.d(TAG, "🔋 WakeLock zwolniony");
+        }
         
         // Przywróć pierwotną głośność przy zamknięciu aplikacji
         if (originalVolume != -1) {
@@ -1121,8 +1464,26 @@ public class MainActivity extends Activity {
             return;
         }
         
-        Log.d(TAG, "🏃‍♂️ ROZPOCZYNAM TRENING BIEGOWY");
+        // Inicjalizuj LocationManager
+        locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        
+        // Sprawdź czy GPS jest włączony
+        if (locationManager == null || !locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            speak("Ostrzeżenie! GPS nie jest włączony. Włącz GPS w ustawieniach.");
+            workoutTimerText.setText("⚠️ GPS NIE WŁĄCZONY!\nWłącz GPS w ustawieniach telefonu");
+            Log.e(TAG, "❌ GPS_PROVIDER nie jest dostępny lub wyłączony!");
+            return;
+        }
+        
+        Log.d(TAG, "🏃‍♂️ ROZPOCZYNAM TRENING BIEGOWY z GPS");
         isRunningWorkoutActive = true;
+        
+        // Włącz WakeLock - utrzyma CPU włączony
+        if (wakeLock != null && !wakeLock.isHeld()) {
+            wakeLock.acquire();
+            Log.d(TAG, "🔋 WakeLock włączony - GPS i CPU pozostaną aktywne");
+        }
+        
         runningStartTime = System.currentTimeMillis();
         totalDistance = 0.0;
         lastLocation = null;
@@ -1130,9 +1491,6 @@ public class MainActivity extends Activity {
         heartRateSum = 0;
         heartRateCount = 0;
         maxHeartRate = 0;
-        
-        // Inicjalizuj LocationManager
-        locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
         locationListener = new LocationListener() {
             @Override
             public void onLocationChanged(Location location) {
@@ -1146,23 +1504,59 @@ public class MainActivity extends Activity {
             public void onProviderEnabled(String provider) {}
             
             @Override
-            public void onProviderDisabled(String provider) {}
+            public void onProviderDisabled(String provider) {
+                Log.w(TAG, "⚠️ GPS został wyłączony podczas treningu!");
+                speak("Ostrzeżenie! GPS został wyłączony");
+            }
         };
         
-        // Rozpocznij śledzenie GPS (co 1 sekundę, min 1 metr)
-        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000, 1, locationListener);
+        // Rozpocznij śledzenie GPS
+        // Parametry: provider, minTime (ms), minDistance (m), listener
+        // 500ms = co pół sekundy, 0m = każda zmiana pozycji
+        try {
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 500, 0, locationListener);
+            Log.d(TAG, "📍 GPS tracking włączony: 500ms, 0m minDistance");
+            
+            // Próba pobrać ostatnią znaną lokalizację
+            Location lastKnownLocation = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+            if (lastKnownLocation != null) {
+                Log.d(TAG, "📍 Ostatnia znana pozycja: " + lastKnownLocation.getLatitude() + ", " + lastKnownLocation.getLongitude());
+                speak("Trening biegowy rozpoczęty. GPS aktywny");
+            } else {
+                Log.d(TAG, "📍 Brak ostatniej znanej pozycji - oczekiwanie na GPS fix");
+                speak("Trening biegowy rozpoczęty. Ustalanie pozycji GPS");
+            }
+        } catch (SecurityException e) {
+            Log.e(TAG, "❌ Błąd uprawnień GPS: " + e.getMessage());
+            speak("Błąd! Brak uprawnień GPS");
+            isRunningWorkoutActive = false;
+            if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+            }
+            return;
+        }
         
-        speak("Trening biegowy rozpoczęty");
+        // Komunikat już został wywołany wyżej (zależnie od lastKnownLocation)
         updateRunningInterface();
     }
     
     private void updateRunningStats(Location location) {
         if (!isRunningWorkoutActive) return;
         
+        Log.d(TAG, "📍 GPS Update: lat=" + location.getLatitude() + ", lon=" + location.getLongitude() + 
+            ", accuracy=" + location.getAccuracy() + "m, speed=" + location.getSpeed() + "m/s");
+        
         if (lastLocation != null) {
             // Oblicz dystans między punktami
             float distance = lastLocation.distanceTo(location);
-            totalDistance += distance;
+            
+            // Ignoruj małe ruchy (szum GPS) - tylko jeśli accuracy jest dobry
+            if (distance > 2 || location.getAccuracy() < 10) {
+                totalDistance += distance;
+                Log.d(TAG, "📏 Dodano dystans: " + distance + "m, total: " + (totalDistance/1000) + "km");
+            } else {
+                Log.d(TAG, "⏭️ Pominięto mały ruch: " + distance + "m (accuracy: " + location.getAccuracy() + "m)");
+            }
             
             // Oblicz prędkość
             if (location.hasSpeed()) {
@@ -1230,9 +1624,20 @@ public class MainActivity extends Activity {
         Log.d(TAG, "🛑 ZATRZYMUJĘ TRENING BIEGOWY");
         isRunningWorkoutActive = false;
         
+        // Wyłącz WakeLock
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+            Log.d(TAG, "🔋 WakeLock wyłączony");
+        }
+        
         // Zatrzymaj GPS
         if (locationManager != null && locationListener != null) {
-            locationManager.removeUpdates(locationListener);
+            try {
+                locationManager.removeUpdates(locationListener);
+                Log.d(TAG, "📍 GPS tracking zatrzymany");
+            } catch (SecurityException e) {
+                Log.e(TAG, "❌ Błąd zatrzymania GPS: " + e.getMessage());
+            }
         }
         
         // Pokaż raport
