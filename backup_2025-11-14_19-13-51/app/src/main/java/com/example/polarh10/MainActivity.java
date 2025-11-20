@@ -51,6 +51,7 @@ public class MainActivity extends Activity {
     private TextView statusText;
     private TextView heartRateText;
     private Button connectButton;
+    private Button disconnectButton;
     
     // Timer treningowy
     private TextView currentTimeText;
@@ -162,16 +163,27 @@ public class MainActivity extends Activity {
         heartRateText.setTextSize(28);
         mainLayout.addView(heartRateText);
         
-        // Przycisk połącz/rozłącz
+        // Przycisk połącz
         connectButton = new Button(this);
-        connectButton.setText("🎯 POŁĄCZ");
+        connectButton.setText("🎯 POŁĄCZ Z TWOJĄ OPASKĄ");
         connectButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                toggleConnection();
+                connectToPolar();
             }
         });
         mainLayout.addView(connectButton);
+        
+        // Przycisk rozłącz
+        disconnectButton = new Button(this);
+        disconnectButton.setText("❌ ROZŁĄCZ");
+        disconnectButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                disconnectFromPolar();
+            }
+        });
+        mainLayout.addView(disconnectButton);
         
         // SEPARATOR
         TextView separatorText = new TextView(this);
@@ -397,26 +409,14 @@ public class MainActivity extends Activity {
         Log.d(TAG, "🔐 Proszę o uprawnienia Bluetooth");
     }
     
-    private void toggleConnection() {
-        if (bluetoothGatt != null) {
-            // Już połączony - rozłącz
-            disconnectFromPolar();
-        } else {
-            // Nie połączony - połącz
-            connectToPolar();
-        }
-    }
-    
     private void connectToPolar() {
         Log.d(TAG, "🎯 Próba połączenia z " + POLAR_H10_MAC);
         statusText.setText("Status: Łączenie z Twoją opaską...");
-        connectButton.setText("⏳ ŁĄCZENIE...");
         
         try {
             BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
             if (bluetoothAdapter == null) {
                 statusText.setText("Status: Błąd - brak Bluetooth");
-                connectButton.setText("🎯 POŁĄCZ");
                 return;
             }
             
@@ -426,7 +426,6 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             Log.e(TAG, "Błąd łączenia: " + e.getMessage());
             statusText.setText("Status: Błąd łączenia - " + e.getMessage());
-            connectButton.setText("🎯 POŁĄCZ");
         }
     }
     
@@ -441,7 +440,6 @@ public class MainActivity extends Activity {
         
         statusText.setText("Status: Rozłączono");
         heartRateText.setText("❤️ Tętno: 0 BPM");
-        connectButton.setText("🎯 POŁĄCZ");
     }
     
     private BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
@@ -454,7 +452,6 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         statusText.setText("Status: ✅ POŁĄCZONO! Szukam serwisu HR...");
-                        connectButton.setText("❌ ROZŁĄCZ");
                     }
                 });
                 
@@ -469,7 +466,6 @@ public class MainActivity extends Activity {
                     public void run() {
                         statusText.setText("Status: Rozłączono");
                         heartRateText.setText("❤️ Tętno: 0 BPM");
-                        connectButton.setText("🎯 POŁĄCZ");
                     }
                 });
             }
