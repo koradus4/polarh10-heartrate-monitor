@@ -173,6 +173,7 @@ public class MainActivity extends Activity {
     private long lastTimerSpeakTimestamp = 0L;
     private long lastZoneSpeakTimestamp = 0L;
     private long lastZoneSettingsChangeTime = 0L;
+    private boolean isZoneMonitoringActive = false;
     
     // Klasa pomocnicza do przechowywania punktów GPS
     private static class TrackPoint {
@@ -302,6 +303,12 @@ public class MainActivity extends Activity {
                 return false;
             }
         });
+        LinearLayout.LayoutParams connectLayoutParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        connectLayoutParams.setMargins(0, 20, 0, 12);
+        connectButton.setLayoutParams(connectLayoutParams);
         mainLayout.addView(connectButton);
 
         // Przycisk ustawień stref tętna
@@ -320,6 +327,12 @@ public class MainActivity extends Activity {
                 showHrZoneSettingsDialog();
             }
         });
+        LinearLayout.LayoutParams hrLayoutParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        hrLayoutParams.setMargins(0, 0, 0, 20);
+        hrSettingsButton.setLayoutParams(hrLayoutParams);
         mainLayout.addView(hrSettingsButton);
         updateHrSettingsButtonLabel();
         
@@ -1078,6 +1091,7 @@ public class MainActivity extends Activity {
         Log.d(TAG, "🔥 TRENING ROZPOCZĘTY - Runda 1/" + totalRounds);
         isCountdownActive = false;
         isWorkoutActive = true;
+        setZoneMonitoringActive(true);
         
         // Włącz WakeLock - utrzyma CPU włączony
         if (wakeLock != null && !wakeLock.isHeld()) {
@@ -1228,6 +1242,7 @@ public class MainActivity extends Activity {
     private void stopWorkout() {
         Log.d(TAG, "🚫 TRENING ZATRZYMANY przez użytkownika");
         isWorkoutActive = false;
+        setZoneMonitoringActive(false);
         isStopPressed = false;
         
         // Wyłącz WakeLock
@@ -1252,6 +1267,7 @@ public class MainActivity extends Activity {
     private void finishWorkout() {
         Log.d(TAG, "✅ TRENING ZAKOŃCZONY - czas minął!");
         isWorkoutActive = false;
+        setZoneMonitoringActive(false);
         
         // Wyłącz WakeLock
         if (wakeLock != null && wakeLock.isHeld()) {
@@ -1743,6 +1759,9 @@ public class MainActivity extends Activity {
     }
 
     private void updateHeartRateZoneUI() {
+        if (!isZoneMonitoringActive) {
+            return;
+        }
         if (zoneBackgroundTarget == null) {
             return;
         }
@@ -1859,6 +1878,9 @@ public class MainActivity extends Activity {
     }
 
     private void maybeAnnounceZone(int zone) {
+        if (!isZoneMonitoringActive) {
+            return;
+        }
         if (!isTtsReady || tts == null) {
             return;
         }
@@ -1912,6 +1934,21 @@ public class MainActivity extends Activity {
         lastZoneAnnounced = -1;
         lastZoneAnnouncementTime = 0L;
         lastZoneSpeakTimestamp = 0L;
+    }
+
+    private void setZoneMonitoringActive(boolean active) {
+        if (isZoneMonitoringActive == active) {
+            return;
+        }
+        isZoneMonitoringActive = active;
+        if (active) {
+            lastZoneAnnounced = -1;
+            lastZoneAnnouncementTime = 0L;
+            lastZoneSpeakTimestamp = 0L;
+            updateHeartRateZoneUI();
+        } else {
+            resetZoneFeedback();
+        }
     }
     
     @Override
@@ -2047,6 +2084,7 @@ public class MainActivity extends Activity {
         
         Log.d(TAG, "🏃‍♂️ ROZPOCZYNAM TRENING BIEGOWY z GPS");
         isRunningWorkoutActive = true;
+        setZoneMonitoringActive(true);
         
         // Włącz WakeLock - utrzyma CPU włączony
         if (wakeLock != null && !wakeLock.isHeld()) {
@@ -2214,6 +2252,7 @@ public class MainActivity extends Activity {
         
         Log.d(TAG, "🛑 ZATRZYMUJĘ TRENING BIEGOWY");
         isRunningWorkoutActive = false;
+        setZoneMonitoringActive(false);
         
         // Wyłącz WakeLock
         if (wakeLock != null && wakeLock.isHeld()) {
