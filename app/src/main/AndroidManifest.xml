@@ -47,6 +47,11 @@
             android:name=".MapActivity"
             android:exported="false"
             android:label="Mapa Treningu" />
+
+        <service
+            android:name=".WorkoutForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
     </application>
 
 </manifest>

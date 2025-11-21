@@ -1,5 +1,6 @@
 package com.example.polarh10;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.bluetooth.BluetoothAdapter;
@@ -12,8 +13,11 @@ import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothProfile;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.provider.Settings;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
@@ -90,6 +94,10 @@ public class MainActivity extends Activity {
     private int currentHeartRate = 0;
     private String lastGpxPath = null;
     
+    // Auto-reconnect
+    private boolean isAutoReconnectEnabled = false;
+    private Runnable reconnectRunnable = null;
+    
     // Zmienne timera
     private String selectedTimerType = "treningowy";  // "treningowy" lub "biegowy"
     private int workoutTimeMinutes = 3;               // czas pracy w minutach
@@ -103,6 +111,12 @@ public class MainActivity extends Activity {
     private boolean isCountdownActive = false;
     private boolean isStopPressed = false;
     private int stopPressCounter = 0;
+    private static final int DEFAULT_RUNNING_TIMER_MINUTES = 60;
+    private int runningTimerMinutes = DEFAULT_RUNNING_TIMER_MINUTES;
+    private int mainTimerRemainingSeconds = 0;
+    private String mainTimerLabel = "GŁÓWNY";
+    private boolean isMainTimerActive = false;
+    private Runnable mainTimerRunnable;
     
     // Zabezpieczenie przycisku rozłącz - przytrzymanie 5s
     private boolean isDisconnectPressActive = false;
@@ -142,6 +156,12 @@ public class MainActivity extends Activity {
     private int maxHeartRate = 0;
     private ArrayList<TrackPoint> gpsTrack = new ArrayList<>();
 
+    private static final int DEFAULT_GRADIENT_START = Color.parseColor("#3d4a2c");
+    private static final int DEFAULT_GRADIENT_MID = Color.parseColor("#5a6b47");
+    private static final int DEFAULT_GRADIENT_END = Color.parseColor("#3d4a2c");
+    private static final float PRIMARY_BUTTON_CORNER_RADIUS = 30f;
+    private static final int REQUEST_RUNNING_PERMISSIONS = 42;
+
     // Strefy tętna
     private static final String PREFS_NAME = "hr_zone_prefs";
     private static final String PREF_HR_MAX = "pref_hr_max";
@@ -177,6 +197,8 @@ public class MainActivity extends Activity {
     private long lastTimerSpeakTimestamp = 0L;
     private long lastZoneSpeakTimestamp = 0L;
     private boolean isZoneMonitoringActive = false;
+    private boolean pendingRunningStart = false;
+    private boolean awaitingBackgroundPermissionSettings = false;
     
     // Klasa pomocnicza do przechowywania punktów GPS
     private static class TrackPoint {
@@ -192,6 +214,94 @@ public class MainActivity extends Activity {
             this.elevation = ele;
             this.timestamp = time;
             this.heartRate = hr;
+        }
+    }
+
+    private GradientDrawable createRoundedGradient(int startColor, int middleColor, int endColor) {
+        GradientDrawable gradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{startColor, middleColor, endColor}
+        );
+        gradient.setCornerRadius(PRIMARY_BUTTON_CORNER_RADIUS);
+        return gradient;
+    }
+
+    private GradientDrawable createDefaultGradient() {
+        return createRoundedGradient(DEFAULT_GRADIENT_START, DEFAULT_GRADIENT_MID, DEFAULT_GRADIENT_END);
+    }
+
+    private GradientDrawable createGradientForBaseColor(int baseColor) {
+        int darker = adjustColorBrightness(baseColor, 0.7f);
+        int lighter = adjustColorBrightness(baseColor, 1.25f);
+        return createRoundedGradient(darker, baseColor, lighter);
+    }
+
+    private int adjustColorBrightness(int color, float factor) {
+        int r = clampColorChannel(Math.round(Color.red(color) * factor));
+        int g = clampColorChannel(Math.round(Color.green(color) * factor));
+        int b = clampColorChannel(Math.round(Color.blue(color) * factor));
+        return Color.argb(Color.alpha(color), r, g, b);
+    }
+
+    private int clampColorChannel(int value) {
+        if (value < 0) return 0;
+        if (value > 255) return 255;
+        return value;
+    }
+
+    private void applyGradient(Button button, GradientDrawable drawable) {
+        if (button == null || drawable == null) {
+            return;
+        }
+        button.setBackground(drawable);
+        button.setTextColor(0xFFFFFFFF);
+    }
+
+    private void applyDefaultGradient(Button button) {
+        applyGradient(button, createDefaultGradient());
+    }
+
+    private Button[] getPrimaryButtons() {
+        return new Button[]{
+            connectButton,
+            hrSettingsButton,
+            timerTypeButton,
+            startWorkoutButton,
+            runningWorkoutButton,
+            showMapButton,
+            closeAppButton
+        };
+    }
+
+    private boolean shouldSkipDynamicGradient(Button button) {
+        if (button == null) {
+            return true;
+        }
+        if (button == runningWorkoutButton && (isRunningWorkoutActive || isStopRunningPressActive)) {
+            return true;
+        }
+        return false;
+    }
+
+    private void applyGradientToPrimaryButtons(int baseColor) {
+        if (baseColor == Color.TRANSPARENT || baseColor == 0) {
+            applyDefaultGradientsToPrimaryButtons();
+            return;
+        }
+        for (Button button : getPrimaryButtons()) {
+            if (shouldSkipDynamicGradient(button)) {
+                continue;
+            }
+            applyGradient(button, createGradientForBaseColor(baseColor));
+        }
+    }
+
+    private void applyDefaultGradientsToPrimaryButtons() {
+        for (Button button : getPrimaryButtons()) {
+            if (shouldSkipDynamicGradient(button)) {
+                continue;
+            }
+            applyDefaultGradient(button);
         }
     }
     
@@ -270,13 +380,7 @@ public class MainActivity extends Activity {
         // Przycisk połącz/rozłącz
         connectButton = new Button(this);
         connectButton.setText("🎯 POŁĄCZ");
-        GradientDrawable connectGradient = new GradientDrawable(
-            GradientDrawable.Orientation.TL_BR,
-            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
-        );
-        connectGradient.setCornerRadius(30);
-        connectButton.setBackground(connectGradient);
-        connectButton.setTextColor(0xFFFFFFFF);
+        applyDefaultGradient(connectButton);
         connectButton.setOnTouchListener(new View.OnTouchListener() {
             @Override
             public boolean onTouch(View v, MotionEvent event) {
@@ -317,13 +421,7 @@ public class MainActivity extends Activity {
         // Przycisk ustawień stref tętna
         hrSettingsButton = new Button(this);
         hrSettingsButton.setText(getHrSettingsButtonLabel());
-        GradientDrawable hrGradient = new GradientDrawable(
-            GradientDrawable.Orientation.TL_BR,
-            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
-        );
-        hrGradient.setCornerRadius(30);
-        hrSettingsButton.setBackground(hrGradient);
-        hrSettingsButton.setTextColor(0xFFFFFFFF);
+        applyDefaultGradient(hrSettingsButton);
         hrSettingsButton.setOnTouchListener(new View.OnTouchListener() {
             @Override
             public boolean onTouch(View v, MotionEvent event) {
@@ -363,13 +461,7 @@ public class MainActivity extends Activity {
         // Przycisk wyboru typu timera
         timerTypeButton = new Button(this);
         timerTypeButton.setText("🏆 Timer CrossFit ▼");
-        GradientDrawable timerTypeGradient = new GradientDrawable(
-            GradientDrawable.Orientation.TL_BR,
-            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
-        );
-        timerTypeGradient.setCornerRadius(30);
-        timerTypeButton.setBackground(timerTypeGradient);
-        timerTypeButton.setTextColor(0xFFFFFFFF);
+        applyDefaultGradient(timerTypeButton);
         timerTypeButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -552,13 +644,7 @@ public class MainActivity extends Activity {
         // Przycisk START/STOP połączony
         startWorkoutButton = new Button(this);
         startWorkoutButton.setText("🏃‍♂️ START TRENINGU");
-        GradientDrawable startGradient = new GradientDrawable(
-            GradientDrawable.Orientation.TL_BR,
-            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
-        );
-        startGradient.setCornerRadius(30);
-        startWorkoutButton.setBackground(startGradient);
-        startWorkoutButton.setTextColor(0xFFFFFFFF);
+        applyDefaultGradient(startWorkoutButton);
         startWorkoutButton.setOnTouchListener(new View.OnTouchListener() {
             @Override
             public boolean onTouch(View v, MotionEvent event) {
@@ -596,18 +682,7 @@ public class MainActivity extends Activity {
         showMapButton.setText("🗺️ POKAŻ TRASĘ");
         showMapButton.setTextSize(14);
         showMapButton.setVisibility(View.GONE); // Ukryty dopóki nie ma trasy
-        
-        GradientDrawable mapButtonDrawable = new GradientDrawable(
-            GradientDrawable.Orientation.TL_BR,
-            new int[]{
-                Color.parseColor("#3d4a2c"),
-                Color.parseColor("#5a6b47"),
-                Color.parseColor("#3d4a2c")
-            }
-        );
-        mapButtonDrawable.setCornerRadius(30);
-        showMapButton.setBackground(mapButtonDrawable);
-        showMapButton.setTextColor(0xFFFFFFFF);
+        applyDefaultGradient(showMapButton);
         
         LinearLayout.LayoutParams mapParams = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, 120);
@@ -631,21 +706,7 @@ public class MainActivity extends Activity {
         closeAppButton = new Button(this);
         closeAppButton.setText("🚺 ZAMKNIJ");
         closeAppButton.setTextSize(12);
-        
-        // Gradient panterka wojskowa - zaokrąglony
-        GradientDrawable closeButtonDrawable = new GradientDrawable(
-            GradientDrawable.Orientation.TL_BR,
-            new int[]{
-                Color.parseColor("#3d4a2c"), // Ciemnozielony
-                Color.parseColor("#5a6b47"), // Średni zielony
-                Color.parseColor("#3d4a2c")  // Ciemnozielony
-            }
-        );
-        closeButtonDrawable.setShape(GradientDrawable.RECTANGLE);
-        closeButtonDrawable.setCornerRadius(30); // Zaokrąglone rogi
-        closeAppButton.setBackground(closeButtonDrawable);
-        
-        closeAppButton.setTextColor(0xFFFFFFFF); // Biały tekst
+        applyDefaultGradient(closeAppButton);
         LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, 120);
         closeParams.setMargins(0, 20, 0, 0);
@@ -704,9 +765,48 @@ public class MainActivity extends Activity {
         ActivityCompat.requestPermissions(this, permissions, 1);
         Log.d(TAG, "🔐 Proszę o uprawnienia Bluetooth");
     }
+
+    private boolean ensureRunningPermissions() {
+        List<String> permissionsToRequest = new ArrayList<>();
+
+        boolean fineGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+        if (!fineGranted) {
+            permissionsToRequest.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+
+        boolean needsBackground = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED;
+
+        if (needsBackground && Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            permissionsToRequest.add(Manifest.permission.ACCESS_BACKGROUND_LOCATION);
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS);
+        }
+
+        if (!permissionsToRequest.isEmpty()) {
+            ActivityCompat.requestPermissions(this,
+                permissionsToRequest.toArray(new String[0]),
+                REQUEST_RUNNING_PERMISSIONS);
+            Log.d(TAG, "🔐 Brak dodatkowych uprawnień. Pytam o: " + permissionsToRequest);
+            return false;
+        }
+
+        if (needsBackground && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            showBackgroundLocationSettingsDialog();
+            return false;
+        }
+
+        return true;
+    }
     
     private void autoConnectPolarAndGPS() {
         Log.d(TAG, "🚀 AUTO-CONNECT: Rozpoczynam automatyczne połączenia...");
+        
+        // Włącz auto-reconnect
+        isAutoReconnectEnabled = true;
         
         // 1. Połącz z Polar H10
         connectToPolar();
@@ -798,13 +898,6 @@ public class MainActivity extends Activity {
                 // 5 sekund upłynęło - zatrzymaj trening
                 isStopRunningPressActive = false;
                 stopRunningWorkout();
-                runningWorkoutButton.setText("🏃‍♂️ TRENING BIEGOWY");
-                GradientDrawable greenGradient = new GradientDrawable(
-                    GradientDrawable.Orientation.TL_BR,
-                    new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
-                );
-                greenGradient.setCornerRadius(30);
-                runningWorkoutButton.setBackground(greenGradient);
             } else {
                 // Aktualizuj tekst przycisku
                 int secondsLeft = (int) Math.ceil(remainingTime / 1000.0);
@@ -867,6 +960,7 @@ public class MainActivity extends Activity {
         Log.d(TAG, "🎯 Próba połączenia z " + POLAR_H10_MAC);
         statusText.setText("Polar: ⏳ Łączenie...");
         connectButton.setText("⏳ ŁĄCZENIE...");
+        isAutoReconnectEnabled = true;
         
         try {
             BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
@@ -888,6 +982,8 @@ public class MainActivity extends Activity {
     
     private void disconnectFromPolar() {
         Log.d(TAG, "❌ Rozłączanie");
+        isAutoReconnectEnabled = false;
+        stopAutoReconnect();
         
         if (bluetoothGatt != null) {
             bluetoothGatt.disconnect();
@@ -908,6 +1004,9 @@ public class MainActivity extends Activity {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Log.d(TAG, "✅ POŁĄCZONO z Polar H10!");
                 
+                // Zatrzymaj auto-reconnect przy udanym połączeniu
+                stopAutoReconnect();
+                
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
@@ -922,6 +1021,15 @@ public class MainActivity extends Activity {
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Log.d(TAG, "❌ ROZŁĄCZONO z Polar H10");
                 
+                // Wyczyść połączenie
+                if (gatt != null) {
+                    gatt.close();
+                }
+                bluetoothGatt = null;
+                
+                final boolean reconnectEnabled = isAutoReconnectEnabled;
+                Log.d(TAG, "🔍 isAutoReconnectEnabled = " + reconnectEnabled);
+                
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
@@ -930,6 +1038,15 @@ public class MainActivity extends Activity {
                         updateHeartRateDisplay(0);
                         resetZoneFeedback();
                         connectButton.setText("🎯 POŁĄCZ");
+                        
+                        // Uruchom auto-reconnect jeśli włączony
+                        Log.d(TAG, "🔍 Sprawdzam auto-reconnect: " + reconnectEnabled);
+                        if (reconnectEnabled) {
+                            Log.d(TAG, "🔍 Wywołuję startAutoReconnect()");
+                            startAutoReconnect();
+                        } else {
+                            Log.d(TAG, "🔍 Auto-reconnect wyłączony - nie uruchamiam");
+                        }
                     }
                 });
             }
@@ -1150,6 +1267,7 @@ public class MainActivity extends Activity {
         
         // Ustaw czas dla pierwszej fazy (workout)
         workoutTimeLeftSeconds = workoutTimeMinutes * 60;
+        startMainTimerCountdown(getCrossfitTotalSeconds(), "GŁÓWNY");
         
         // TTS start workout
         speak("Work! Runda 1");
@@ -1282,6 +1400,7 @@ public class MainActivity extends Activity {
     
     private void stopWorkout() {
         Log.d(TAG, "🚫 TRENING ZATRZYMANY przez użytkownika");
+        stopMainTimerCountdown();
         isWorkoutActive = false;
         setZoneMonitoringActive(false);
         isStopPressed = false;
@@ -1307,6 +1426,7 @@ public class MainActivity extends Activity {
     
     private void finishWorkout() {
         Log.d(TAG, "✅ TRENING ZAKOŃCZONY - czas minął!");
+        stopMainTimerCountdown();
         isWorkoutActive = false;
         setZoneMonitoringActive(false);
         
@@ -1347,6 +1467,7 @@ public class MainActivity extends Activity {
         
         // Włącz przyciski
         timerTypeButton.setEnabled(true);
+        updateMainTimerDisplay();
         
         Log.d(TAG, "🔄 Interface zurückgesetzt für nächstes Training");
     }
@@ -1358,7 +1479,7 @@ public class MainActivity extends Activity {
             selectedTimerType = "biegowy";
             timerTypeButton.setText("🏃 Timer Biegowy ▼");
             timerSettingsLayout.setVisibility(View.GONE);
-            mainTimerDisplay.setText("60:00 ⏰");
+            updateMainTimerDisplay();
             // Ukryj przyciski treningu treningowego
             startWorkoutButton.setVisibility(View.GONE);
             stopWorkoutButton.setVisibility(View.GONE);
@@ -1383,14 +1504,7 @@ public class MainActivity extends Activity {
     
     private void createRunningWorkoutButton() {
         runningWorkoutButton = new Button(this);
-        runningWorkoutButton.setText("🏃 START TRENINGU");
-        GradientDrawable runningGradient = new GradientDrawable(
-            GradientDrawable.Orientation.TL_BR,
-            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
-        );
-        runningGradient.setCornerRadius(30);
-        runningWorkoutButton.setBackground(runningGradient);
-        runningWorkoutButton.setTextColor(0xFFFFFFFF); // Biały tekst
+        setRunningButtonToStartState();
         runningWorkoutButton.setOnTouchListener(new View.OnTouchListener() {
             @Override
             public boolean onTouch(View v, MotionEvent event) {
@@ -1403,14 +1517,9 @@ public class MainActivity extends Activity {
                             handler.post(stopRunningCountdownRunnable);
                         } else {
                             // Trening nieaktywny - natychmiastowy start
-                            startRunningWorkout();
-                            runningWorkoutButton.setText("🛑 ZATRZYMAJ");
-                            GradientDrawable redGradient = new GradientDrawable(
-                                GradientDrawable.Orientation.TL_BR,
-                                new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
-                            );
-                            redGradient.setCornerRadius(30);
-                            runningWorkoutButton.setBackground(redGradient);
+                            if (startRunningWorkout()) {
+                                setRunningButtonToStopState();
+                            }
                         }
                         return true;
                         
@@ -1420,13 +1529,7 @@ public class MainActivity extends Activity {
                             // Przerwano przytrzymanie
                             isStopRunningPressActive = false;
                             handler.removeCallbacks(stopRunningCountdownRunnable);
-                            runningWorkoutButton.setText("🛑 ZATRZYMAJ");
-                            GradientDrawable redGradient = new GradientDrawable(
-                                GradientDrawable.Orientation.TL_BR,
-                                new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
-                            );
-                            redGradient.setCornerRadius(30);
-                            runningWorkoutButton.setBackground(redGradient);
+                            setRunningButtonToStopState();
                         }
                         return true;
                 }
@@ -1455,12 +1558,101 @@ public class MainActivity extends Activity {
             }
         }
     }
+
+    private void setRunningButtonToStartState() {
+        if (runningWorkoutButton == null) {
+            return;
+        }
+        applyDefaultGradient(runningWorkoutButton);
+        runningWorkoutButton.setText("🏃 START TRENINGU");
+    }
+
+    private void setRunningButtonToStopState() {
+        if (runningWorkoutButton == null) {
+            return;
+        }
+        GradientDrawable redGradient = createRoundedGradient(
+            Color.parseColor("#922B21"),
+            Color.parseColor("#C0392B"),
+            Color.parseColor("#922B21")
+        );
+        runningWorkoutButton.setBackground(redGradient);
+        runningWorkoutButton.setText("🛑 ZATRZYMAJ");
+    }
     
     private void updateMainTimerDisplay() {
-        int totalSeconds = (workoutTimeMinutes * 60 + restTimeSeconds) * totalRounds;
-        int minutes = totalSeconds / 60;
-        int seconds = totalSeconds % 60;
-        mainTimerDisplay.setText(String.format("GŁÓWNY: %d:%02d", minutes, seconds));
+        if (isMainTimerActive) {
+            return;
+        }
+        if ("biegowy".equals(selectedTimerType)) {
+            setMainTimerIdleValue(runningTimerMinutes * 60, "BIEG");
+        } else {
+            setMainTimerIdleValue(getCrossfitTotalSeconds(), "GŁÓWNY");
+        }
+    }
+
+    private void setMainTimerIdleValue(int seconds, String label) {
+        mainTimerRemainingSeconds = Math.max(0, seconds);
+        mainTimerLabel = label;
+        mainTimerDisplay.setText(formatMainTimerLabel());
+    }
+
+    private void startMainTimerCountdown(int totalSeconds, String label) {
+        stopMainTimerCountdown();
+        mainTimerRemainingSeconds = Math.max(0, totalSeconds);
+        mainTimerLabel = label;
+        mainTimerDisplay.setText(formatMainTimerLabel());
+        if (mainTimerRemainingSeconds == 0) {
+            handleMainTimerFinished();
+            return;
+        }
+        isMainTimerActive = true;
+        mainTimerRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (!isMainTimerActive) {
+                    return;
+                }
+                if (mainTimerRemainingSeconds > 0) {
+                    mainTimerRemainingSeconds--;
+                    mainTimerDisplay.setText(formatMainTimerLabel());
+                    handler.postDelayed(this, 1000);
+                } else {
+                    isMainTimerActive = false;
+                    mainTimerDisplay.setText(formatMainTimerLabel());
+                    handleMainTimerFinished();
+                }
+            }
+        };
+        handler.postDelayed(mainTimerRunnable, 1000);
+    }
+
+    private void stopMainTimerCountdown() {
+        if (mainTimerRunnable != null) {
+            handler.removeCallbacks(mainTimerRunnable);
+            mainTimerRunnable = null;
+        }
+        isMainTimerActive = false;
+    }
+
+    private void handleMainTimerFinished() {
+        Log.d(TAG, "⏰ Main timer finished");
+        if (isRunningWorkoutActive) {
+            stopRunningWorkout();
+            return;
+        } else if (!isWorkoutActive) {
+            updateMainTimerDisplay();
+        }
+    }
+
+    private String formatMainTimerLabel() {
+        int minutes = mainTimerRemainingSeconds / 60;
+        int seconds = mainTimerRemainingSeconds % 60;
+        return String.format("%s: %d:%02d", mainTimerLabel, minutes, seconds);
+    }
+
+    private int getCrossfitTotalSeconds() {
+        return (workoutTimeMinutes * 60 + restTimeSeconds) * totalRounds;
     }
     
     private void adjustWorkoutTime(int change) {
@@ -1823,29 +2015,19 @@ public class MainActivity extends Activity {
         switch (zone) {
             case 0:
                 stopZoneBlinking();
-                // Kolor jak na 65% (początek strefy 2)
-                float ratio65 = (65f - warningUpper) / Math.max(1f, alarm - warningUpper);
-                if (ratio65 < 0f) ratio65 = 0f;
-                if (ratio65 > 1f) ratio65 = 1f;
-                int color65 = blendColors(Color.parseColor("#2ECC71"), Color.parseColor("#E67E22"), ratio65);
-                setZoneBackgroundColor(color65);
+                setZoneBackgroundColor(Color.parseColor("#2ECC71"));
                 break;
             case 1:
                 stopZoneBlinking();
-                // Kolor jak na 65% (początek strefy 2)
-                float ratio65_warning = (65f - warningUpper) / Math.max(1f, alarm - warningUpper);
-                if (ratio65_warning < 0f) ratio65_warning = 0f;
-                if (ratio65_warning > 1f) ratio65_warning = 1f;
-                int color65_warning = blendColors(Color.parseColor("#2ECC71"), Color.parseColor("#E67E22"), ratio65_warning);
-                setZoneBackgroundColor(color65_warning);
+                setZoneBackgroundColor(Color.parseColor("#F1C40F"));
                 break;
             case 2:
                 stopZoneBlinking();
-                float span = Math.max(1f, alarm - warningUpper);
+                float span = Math.max(1f, aerobic - warningUpper);
                 float ratio = (percent - warningUpper) / span;
                 if (ratio < 0f) ratio = 0f;
                 if (ratio > 1f) ratio = 1f;
-                int startColor = Color.parseColor("#2ECC71");
+                int startColor = Color.parseColor("#F1C40F");
                 int endColor = Color.parseColor("#E67E22");
                 int blended = blendColors(startColor, endColor, ratio);
                 setZoneBackgroundColor(blended);
@@ -1900,6 +2082,11 @@ public class MainActivity extends Activity {
         if (zoneBackgroundTarget != null) {
             zoneBackgroundTarget.setBackgroundColor(color);
         }
+        if (color == defaultBackgroundColor || !isZoneMonitoringActive) {
+            applyDefaultGradientsToPrimaryButtons();
+        } else {
+            applyGradientToPrimaryButtons(color);
+        }
     }
 
     private int blendColors(int colorFrom, int colorTo, float ratio) {
@@ -1908,6 +2095,75 @@ public class MainActivity extends Activity {
         int green = (int) (Color.green(colorFrom) + ratio * (Color.green(colorTo) - Color.green(colorFrom)));
         int blue = (int) (Color.blue(colorFrom) + ratio * (Color.blue(colorTo) - Color.blue(colorFrom)));
         return Color.argb(alpha, red, green, blue);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (awaitingBackgroundPermissionSettings) {
+            awaitingBackgroundPermissionSettings = false;
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                if (pendingRunningStart) {
+                    handler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (startRunningWorkout()) {
+                                setRunningButtonToStopState();
+                            }
+                        }
+                    });
+                }
+            } else if (pendingRunningStart) {
+                speak("Bez dostępu do lokalizacji w tle nie mogę prowadzić treningu biegowego");
+                pendingRunningStart = false;
+            }
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_RUNNING_PERMISSIONS) {
+            boolean allGranted = grantResults.length > 0;
+            for (int result : grantResults) {
+                if (result != PackageManager.PERMISSION_GRANTED) {
+                    allGranted = false;
+                    break;
+                }
+            }
+
+            if (allGranted && pendingRunningStart) {
+                handler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (startRunningWorkout()) {
+                            setRunningButtonToStopState();
+                        }
+                    }
+                });
+            } else if (!allGranted) {
+                speak("Bez pełnych uprawnień trening biegowy nie będzie działał w tle");
+            }
+            pendingRunningStart = false;
+        }
+    }
+
+    private void showBackgroundLocationSettingsDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Potrzebny dostęp do lokalizacji w tle");
+        builder.setMessage("Aby trening biegowy działał przy zablokowanym ekranie, włącz lokalizację \"Zawsze\" w ustawieniach aplikacji.");
+        builder.setPositiveButton("Otwórz ustawienia", (dialog, which) -> {
+            awaitingBackgroundPermissionSettings = true;
+            Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            Uri uri = Uri.fromParts("package", getPackageName(), null);
+            intent.setData(uri);
+            startActivity(intent);
+        });
+        builder.setNegativeButton("Później", (dialog, which) -> {
+            pendingRunningStart = false;
+            speak("Bez lokalizacji w tle trening biegowy zatrzyma się po wygaszeniu ekranu");
+        });
+        builder.show();
     }
 
     private void maybeAnnounceZone(int zone) {
@@ -1987,6 +2243,48 @@ public class MainActivity extends Activity {
         }
     }
     
+    // ===== AUTO-RECONNECT DO POLAR H10 =====
+    
+    private void startAutoReconnect() {
+        if (!isAutoReconnectEnabled) {
+            Log.d(TAG, "⏭️ Auto-reconnect wyłączony przez użytkownika - pomijam start");
+            return;
+        }
+        
+        if (reconnectRunnable == null) {
+            reconnectRunnable = new Runnable() {
+                @Override
+                public void run() {
+                    if (!isAutoReconnectEnabled) {
+                        Log.d(TAG, "⏹️ Auto-reconnect zatrzymany - nie planuję kolejnych prób");
+                        return;
+                    }
+                    
+                    if (bluetoothGatt == null) {
+                        Log.d(TAG, "🔄 Auto-reconnect: Próba połączenia z Polar H10...");
+                        statusText.setText("Polar: 🔄 Łączenie...");
+                        connectToPolar();
+                    } else {
+                        Log.d(TAG, "ℹ️ Auto-reconnect: aktywne połączenie/próba - czekam na kolejny cykl");
+                    }
+                    
+                    handler.postDelayed(this, 15000);
+                }
+            };
+        }
+        
+        handler.removeCallbacks(reconnectRunnable);
+        handler.postDelayed(reconnectRunnable, 15000);
+        Log.d(TAG, "🔄 Auto-reconnect WŁĄCZONY - próby co 15 sekund");
+    }
+    
+    private void stopAutoReconnect() {
+        if (reconnectRunnable != null) {
+            handler.removeCallbacks(reconnectRunnable);
+        }
+        Log.d(TAG, "⏸️ Auto-reconnect zatrzymany (preferencja: " + isAutoReconnectEnabled + ")");
+    }
+    
     @Override
     protected void onPause() {
         super.onPause();
@@ -2000,8 +2298,130 @@ public class MainActivity extends Activity {
     }
     
     @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        
+        // Zapisz stan treningu CrossFit
+        outState.putBoolean("isWorkoutActive", isWorkoutActive);
+        outState.putBoolean("isCountdownActive", isCountdownActive);
+        outState.putInt("currentRound", currentRound);
+        outState.putBoolean("isInWorkoutPhase", isInWorkoutPhase);
+        outState.putInt("workoutTimeLeftSeconds", workoutTimeLeftSeconds);
+        outState.putInt("countdownSeconds", countdownSeconds);
+        outState.putInt("totalRounds", totalRounds);
+        outState.putInt("workoutTimeMinutes", workoutTimeMinutes);
+        outState.putInt("restTimeSeconds", restTimeSeconds);
+        
+        // Zapisz stan treningu biegowego
+        outState.putBoolean("isRunningWorkoutActive", isRunningWorkoutActive);
+        outState.putLong("runningStartTime", runningStartTime);
+        outState.putDouble("totalDistance", totalDistance);
+        outState.putDouble("maxSpeed", maxSpeed);
+        outState.putInt("heartRateSum", heartRateSum);
+        outState.putInt("heartRateCount", heartRateCount);
+        outState.putInt("maxHeartRate", maxHeartRate);
+        
+        Log.d(TAG, "💾 Stan treningu zapisany - CrossFit: " + isWorkoutActive + ", Biegowy: " + isRunningWorkoutActive);
+    }
+    
+    @Override
+    protected void onRestoreInstanceState(Bundle savedInstanceState) {
+        super.onRestoreInstanceState(savedInstanceState);
+        
+        // Przywróć stan treningu CrossFit
+        isWorkoutActive = savedInstanceState.getBoolean("isWorkoutActive", false);
+        isCountdownActive = savedInstanceState.getBoolean("isCountdownActive", false);
+        currentRound = savedInstanceState.getInt("currentRound", 0);
+        isInWorkoutPhase = savedInstanceState.getBoolean("isInWorkoutPhase", true);
+        workoutTimeLeftSeconds = savedInstanceState.getInt("workoutTimeLeftSeconds", 0);
+        countdownSeconds = savedInstanceState.getInt("countdownSeconds", 0);
+        totalRounds = savedInstanceState.getInt("totalRounds", 5);
+        workoutTimeMinutes = savedInstanceState.getInt("workoutTimeMinutes", 3);
+        restTimeSeconds = savedInstanceState.getInt("restTimeSeconds", 60);
+        
+        // Przywróć stan treningu biegowego
+        isRunningWorkoutActive = savedInstanceState.getBoolean("isRunningWorkoutActive", false);
+        runningStartTime = savedInstanceState.getLong("runningStartTime", 0);
+        totalDistance = savedInstanceState.getDouble("totalDistance", 0.0);
+        maxSpeed = savedInstanceState.getDouble("maxSpeed", 0.0);
+        heartRateSum = savedInstanceState.getInt("heartRateSum", 0);
+        heartRateCount = savedInstanceState.getInt("heartRateCount", 0);
+        maxHeartRate = savedInstanceState.getInt("maxHeartRate", 0);
+        
+        Log.d(TAG, "♻️ Stan treningu przywrócony - CrossFit: " + isWorkoutActive + ", Biegowy: " + isRunningWorkoutActive);
+        
+        // Wznów trening CrossFit jeśli był aktywny
+        if (isWorkoutActive) {
+            Log.d(TAG, "🔄 Wznawianie treningu CrossFit - Runda " + currentRound + "/" + totalRounds);
+            setZoneMonitoringActive(true);
+            
+            // Włącz WakeLock
+            if (wakeLock != null && !wakeLock.isHeld()) {
+                wakeLock.acquire();
+                Log.d(TAG, "🔋 WakeLock włączony przy wznowieniu");
+            }
+            
+            // Wznów timer
+            if (isCountdownActive) {
+                countdownTick();
+            } else {
+                workoutTick();
+            }
+            
+            updateMainTimerDisplay();
+        }
+        
+        // Wznów trening biegowy jeśli był aktywny
+        if (isRunningWorkoutActive) {
+            Log.d(TAG, "🔄 Wznawianie treningu biegowego");
+            setZoneMonitoringActive(true);
+            
+            // Włącz WakeLock
+            if (wakeLock != null && !wakeLock.isHeld()) {
+                wakeLock.acquire();
+                Log.d(TAG, "🔋 WakeLock włączony przy wznowieniu");
+            }
+            
+            // Wznów GPS tracking
+            if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) 
+                    == PackageManager.PERMISSION_GRANTED) {
+                locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+                
+                if (locationListener == null) {
+                    locationListener = new LocationListener() {
+                        @Override
+                        public void onLocationChanged(Location location) {
+                            updateRunningStats(location);
+                        }
+                        @Override
+                        public void onStatusChanged(String provider, int status, Bundle extras) {}
+                        @Override
+                        public void onProviderEnabled(String provider) {}
+                        @Override
+                        public void onProviderDisabled(String provider) {}
+                    };
+                }
+                
+                try {
+                    locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 500, 0, locationListener);
+                    locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 500, 0, locationListener);
+                    Log.d(TAG, "📍 GPS tracking wznowiony");
+                } catch (SecurityException e) {
+                    Log.e(TAG, "❌ Błąd wznowienia GPS: " + e.getMessage());
+                }
+            }
+            
+            updateRunningInterface();
+        }
+    }
+    
+    @Override
     protected void onDestroy() {
         super.onDestroy();
+        
+        // Wyłącz auto-reconnect
+        stopAutoReconnect();
+        
         disconnectFromPolar();
         
         // Zwolnij WakeLock
@@ -2096,16 +2516,14 @@ public class MainActivity extends Activity {
     
     // ===== TRENING BIEGOWY - GPS TRACKING =====
     
-    private void startRunningWorkout() {
-        if (isRunningWorkoutActive) return;
-        
-        // Sprawdź uprawnienia GPS
-        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) 
-                != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, 
-                new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION}, 200);
-            return;
+    private boolean startRunningWorkout() {
+        if (isRunningWorkoutActive) return false;
+
+        if (!ensureRunningPermissions()) {
+            pendingRunningStart = true;
+            return false;
         }
+        pendingRunningStart = false;
         
         // Inicjalizuj LocationManager
         locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
@@ -2115,12 +2533,13 @@ public class MainActivity extends Activity {
             speak("Ostrzeżenie! GPS nie jest włączony. Włącz GPS w ustawieniach.");
             workoutTimerText.setText("⚠️ GPS NIE WŁĄCZONY!\nWłącz GPS w ustawieniach telefonu");
             Log.e(TAG, "❌ GPS_PROVIDER nie jest dostępny lub wyłączony!");
-            return;
+            return false;
         }
         
         Log.d(TAG, "🏃‍♂️ ROZPOCZYNAM TRENING BIEGOWY z GPS");
         isRunningWorkoutActive = true;
         setZoneMonitoringActive(true);
+        startMainTimerCountdown(runningTimerMinutes * 60, "BIEG");
         
         // Włącz WakeLock - utrzyma CPU włączony
         if (wakeLock != null && !wakeLock.isHeld()) {
@@ -2182,15 +2601,20 @@ public class MainActivity extends Activity {
         } catch (SecurityException e) {
             Log.e(TAG, "❌ Błąd uprawnień GPS: " + e.getMessage());
             speak("Błąd! Brak uprawnień GPS");
+            stopMainTimerCountdown();
             isRunningWorkoutActive = false;
             if (wakeLock != null && wakeLock.isHeld()) {
                 wakeLock.release();
             }
-            return;
+            setRunningButtonToStartState();
+            updateMainTimerDisplay();
+            return false;
         }
         
         // Komunikat już został wywołany wyżej (zależnie od lastKnownLocation)
         updateRunningInterface();
+        WorkoutForegroundService.start(getApplicationContext(), "Trening biegowy aktywny");
+        return true;
     }
     
     private void updateRunningStats(Location location) {
@@ -2239,29 +2663,41 @@ public class MainActivity extends Activity {
     
     private void updateRunningInterface() {
         if (!isRunningWorkoutActive) return;
-        
+
         long elapsedTime = System.currentTimeMillis() - runningStartTime;
-        long minutes = elapsedTime / 60000;
-        long seconds = (elapsedTime % 60000) / 1000;
-        
+        long elapsedMinutes = elapsedTime / 60000;
+        long elapsedSeconds = (elapsedTime % 60000) / 1000;
+
+        int remainingSeconds = Math.max(0, mainTimerRemainingSeconds);
+        int remainingMinutes = remainingSeconds / 60;
+        int remainingSecondsPart = remainingSeconds % 60;
+
         double distanceKm = totalDistance / 1000.0;
         String pace = calculatePace(distanceKm, elapsedTime);
-        
+
         String stats = String.format(
             "🏃‍♂️ TRENING BIEGOWY AKTYWNY\n" +
             "💓 Puls: %d bpm\n" +
             "📏 Dystans: %.2f km\n" +
             "⚡ Tempo: %s min/km\n" +
-            "⏱️ Czas: %02d:%02d",
+            "⏱️ Pozostało: %02d:%02d\n" +
+            "🕒 Upłynęło: %02d:%02d",
             currentHeartRate,
             distanceKm,
             pace,
-            minutes, seconds
+            remainingMinutes, remainingSecondsPart,
+            elapsedMinutes, elapsedSeconds
         );
-        
+
         workoutTimerText.setText(stats);
-        Log.d(TAG, "🔄 GPS Update: " + minutes + ":" + String.format("%02d", seconds) + " | " + String.format("%.2f", distanceKm) + "km");
-        
+        updateRunningNotificationSummary(distanceKm, pace, remainingMinutes, remainingSecondsPart);
+        Log.d(
+            TAG,
+            "🔄 GPS Update: elapsed=" + elapsedMinutes + ":" + String.format("%02d", elapsedSeconds) +
+            ", remaining=" + remainingMinutes + ":" + String.format("%02d", remainingSecondsPart) +
+            " | " + String.format("%.2f", distanceKm) + "km"
+        );
+
         // Planuj następną aktualizację za 1 sekundę
         handler.postDelayed(new Runnable() {
             @Override
@@ -2282,13 +2718,35 @@ public class MainActivity extends Activity {
         
         return String.format("%d:%02d", minutes, seconds);
     }
+
+    private void updateRunningNotificationSummary(double distanceKm, String pace, int remainingMinutes, int remainingSecondsPart) {
+        if (!isRunningWorkoutActive) {
+            return;
+        }
+        String summary = String.format(Locale.getDefault(),
+            "HR %d bpm | %.2f km | %02d:%02d do końca | tempo %s",
+            currentHeartRate,
+            distanceKm,
+            remainingMinutes,
+            remainingSecondsPart,
+            pace
+        );
+        WorkoutForegroundService.update(getApplicationContext(), summary);
+    }
     
     private void stopRunningWorkout() {
-        if (!isRunningWorkoutActive) return;
+        if (!isRunningWorkoutActive) {
+            stopMainTimerCountdown();
+            updateMainTimerDisplay();
+            setRunningButtonToStartState();
+            return;
+        }
         
         Log.d(TAG, "🛑 ZATRZYMUJĘ TRENING BIEGOWY");
+        stopMainTimerCountdown();
         isRunningWorkoutActive = false;
         setZoneMonitoringActive(false);
+        WorkoutForegroundService.stop(getApplicationContext());
         
         // Wyłącz WakeLock
         if (wakeLock != null && wakeLock.isHeld()) {
@@ -2308,6 +2766,8 @@ public class MainActivity extends Activity {
         
         // Pokaż raport
         showRunningWorkoutReport();
+        setRunningButtonToStartState();
+        updateMainTimerDisplay();
     }
     
     private void showRunningWorkoutReport() {
