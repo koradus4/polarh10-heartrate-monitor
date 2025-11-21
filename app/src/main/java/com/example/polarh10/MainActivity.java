@@ -116,6 +116,10 @@ public class MainActivity extends Activity {
     private boolean isClosePressActive = false;
     private long closePressStartTime = 0;
     
+    // Zabezpieczenie przycisku HRMAX - przytrzymanie 5s
+    private boolean isHrMaxPressActive = false;
+    private long hrMaxPressStartTime = 0;
+    
     // TTS i Audio
     private TextToSpeech tts;
     private AudioManager audioManager;
@@ -172,7 +176,6 @@ public class MainActivity extends Activity {
     private int lastZoneAnnounced = -1;
     private long lastTimerSpeakTimestamp = 0L;
     private long lastZoneSpeakTimestamp = 0L;
-    private long lastZoneSettingsChangeTime = 0L;
     private boolean isZoneMonitoringActive = false;
     
     // Klasa pomocnicza do przechowywania punktów GPS
@@ -321,10 +324,24 @@ public class MainActivity extends Activity {
         hrGradient.setCornerRadius(30);
         hrSettingsButton.setBackground(hrGradient);
         hrSettingsButton.setTextColor(0xFFFFFFFF);
-        hrSettingsButton.setOnClickListener(new View.OnClickListener() {
+        hrSettingsButton.setOnTouchListener(new View.OnTouchListener() {
             @Override
-            public void onClick(View v) {
-                showHrZoneSettingsDialog();
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        isHrMaxPressActive = true;
+                        hrMaxPressStartTime = System.currentTimeMillis();
+                        handler.post(hrMaxCountdownRunnable);
+                        return true;
+                        
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        isHrMaxPressActive = false;
+                        handler.removeCallbacks(hrMaxCountdownRunnable);
+                        hrSettingsButton.setText(getHrSettingsButtonLabel());
+                        return true;
+                }
+                return false;
             }
         });
         LinearLayout.LayoutParams hrLayoutParams = new LinearLayout.LayoutParams(
@@ -817,6 +834,30 @@ public class MainActivity extends Activity {
                 // Aktualizuj tekst przycisku
                 int secondsLeft = (int) Math.ceil(remainingTime / 1000.0);
                 closeAppButton.setText("⏱️ PRZYTRZYMAJ " + secondsLeft + "s");
+                handler.postDelayed(this, 100);
+            }
+        }
+    };
+    
+    private Runnable hrMaxCountdownRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!isHrMaxPressActive) {
+                return;
+            }
+            
+            long elapsedTime = System.currentTimeMillis() - hrMaxPressStartTime;
+            long remainingTime = 5000 - elapsedTime;
+            
+            if (remainingTime <= 0) {
+                // 5 sekund upłynęło - otwórz dialog
+                isHrMaxPressActive = false;
+                showHrZoneSettingsDialog();
+                hrSettingsButton.setText(getHrSettingsButtonLabel());
+            } else {
+                // Aktualizuj tekst przycisku
+                int secondsLeft = (int) Math.ceil(remainingTime / 1000.0);
+                hrSettingsButton.setText("⏱️ PRZYTRZYMAJ " + secondsLeft + "s");
                 handler.postDelayed(this, 100);
             }
         }
@@ -1326,7 +1367,7 @@ public class MainActivity extends Activity {
             showRunningWorkoutButton();
         } else {
             selectedTimerType = "treningowy";
-            timerTypeButton.setText("🏋️‍♂️ Timer Treningowy ▼");
+            timerTypeButton.setText("🏋️‍♂️ Timer CrossFit ▼");
             timerSettingsLayout.setVisibility(View.VISIBLE);
             updateMainTimerDisplay();
             // Pokaż z powrotem przyciski treningu treningowego
@@ -1515,7 +1556,7 @@ public class MainActivity extends Activity {
         container.setPadding(40, 30, 40, 30);
 
         TextView intro = new TextView(this);
-        intro.setText("Dostosuj HRMAX i progi stref. Zmiana możliwa co 5 sekund, aby uniknąć przypadkowych kliknięć.");
+        intro.setText("Dostosuj HRMAX i progi stref. Zmiany są zapisywane natychmiast.");
         intro.setTextSize(14);
         intro.setPadding(0, 0, 0, 20);
         container.addView(intro);
@@ -1672,26 +1713,7 @@ public class MainActivity extends Activity {
     }
 
     private void handleZoneSettingsChange(Runnable changeAction, List<Button> buttons) {
-        long now = System.currentTimeMillis();
-        if (now - lastZoneSettingsChangeTime < 5000) {
-            if (statusText != null) {
-                statusText.setText("⏳ Odczekaj 5 sekund przed kolejną zmianą stref.");
-            }
-            return;
-        }
         changeAction.run();
-        lastZoneSettingsChangeTime = now;
-        for (Button button : buttons) {
-            button.setEnabled(false);
-        }
-        handler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                for (Button button : buttons) {
-                    button.setEnabled(true);
-                }
-            }
-        }, 5000);
     }
 
     private void loadHrZonePreferences() {
@@ -1801,10 +1823,21 @@ public class MainActivity extends Activity {
         switch (zone) {
             case 0:
                 stopZoneBlinking();
-                setZoneBackgroundColor(Color.parseColor("#1B5E20"));
+                // Kolor jak na 65% (początek strefy 2)
+                float ratio65 = (65f - warningUpper) / Math.max(1f, alarm - warningUpper);
+                if (ratio65 < 0f) ratio65 = 0f;
+                if (ratio65 > 1f) ratio65 = 1f;
+                int color65 = blendColors(Color.parseColor("#2ECC71"), Color.parseColor("#E67E22"), ratio65);
+                setZoneBackgroundColor(color65);
                 break;
             case 1:
-                startZoneBlinking(Color.parseColor("#2E7D32"), Color.parseColor("#1B5E20"));
+                stopZoneBlinking();
+                // Kolor jak na 65% (początek strefy 2)
+                float ratio65_warning = (65f - warningUpper) / Math.max(1f, alarm - warningUpper);
+                if (ratio65_warning < 0f) ratio65_warning = 0f;
+                if (ratio65_warning > 1f) ratio65_warning = 1f;
+                int color65_warning = blendColors(Color.parseColor("#2ECC71"), Color.parseColor("#E67E22"), ratio65_warning);
+                setZoneBackgroundColor(color65_warning);
                 break;
             case 2:
                 stopZoneBlinking();
@@ -1881,6 +1914,9 @@ public class MainActivity extends Activity {
         if (!isZoneMonitoringActive) {
             return;
         }
+        if (!isInWorkoutPhase) {
+            return;
+        }
         if (!isTtsReady || tts == null) {
             return;
         }
@@ -1893,7 +1929,7 @@ public class MainActivity extends Activity {
                 lastZoneAnnouncementTime = now;
                 return;
             }
-            if (now - lastZoneAnnouncementTime < 15000) {
+            if (now - lastZoneAnnouncementTime < 60000) {
                 return;
             }
             if (now - lastTimerSpeakTimestamp < 2000 || now - lastZoneSpeakTimestamp < 5000) {
@@ -1910,7 +1946,7 @@ public class MainActivity extends Activity {
                 lastZoneAnnouncementTime = now;
                 return;
             }
-            if (now - lastZoneAnnouncementTime < 5000) {
+            if (now - lastZoneAnnouncementTime < 15000) {
                 return;
             }
             if (now - lastTimerSpeakTimestamp < 2000 || now - lastZoneSpeakTimestamp < 3000) {
