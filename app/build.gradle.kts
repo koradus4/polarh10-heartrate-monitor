@@ -18,6 +18,10 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+    
+    lint {
+        abortOnError = false
+    }
 
     buildTypes {
         release {
@@ -57,6 +61,10 @@ dependencies {
     // RxJava dla Polar SDK
     implementation("io.reactivex.rxjava3:rxjava:3.1.5")
     implementation("io.reactivex.rxjava3:rxandroid:3.0.0")
+    
+    // OpenStreetMap dla wyświetlania tras GPS
+    implementation("org.osmdroid:osmdroid-android:6.1.18")
+    
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

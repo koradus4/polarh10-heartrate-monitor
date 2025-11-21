@@ -1,6 +1,7 @@
 package com.example.polarh10;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
@@ -9,6 +10,7 @@ import android.bluetooth.BluetoothGattCharacteristic;
 import android.bluetooth.BluetoothGattDescriptor;
 import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothProfile;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.Handler;
@@ -21,9 +23,9 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import java.text.SimpleDateFormat;
 import java.util.Date;
-import java.text.SimpleDateFormat;
 import java.util.Locale;
-import java.util.Locale;
+import java.util.ArrayList;
+import java.util.List;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import android.speech.tts.TextToSpeech;
@@ -37,9 +39,10 @@ import java.io.FileWriter;
 import java.io.IOException;
 import android.os.Environment;
 import android.os.PowerManager;
-import android.content.Context;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
+import android.content.Intent;
 
 public class MainActivity extends Activity {
     
@@ -78,11 +81,14 @@ public class MainActivity extends Activity {
     private Button stopWorkoutButton;
     private Button runningWorkoutButton;
     private Button closeAppButton;
+    private Button showMapButton;
     private LinearLayout mainLayout;
+    private ScrollView scrollView;
     
     private BluetoothGatt bluetoothGatt;
     private Handler handler = new Handler();
     private int currentHeartRate = 0;
+    private String lastGpxPath = null;
     
     // Zmienne timera
     private String selectedTimerType = "treningowy";  // "treningowy" lub "biegowy"
@@ -130,6 +136,60 @@ public class MainActivity extends Activity {
     private int heartRateSum = 0;
     private int heartRateCount = 0;
     private int maxHeartRate = 0;
+    private ArrayList<TrackPoint> gpsTrack = new ArrayList<>();
+
+    // Strefy tętna
+    private static final String PREFS_NAME = "hr_zone_prefs";
+    private static final String PREF_HR_MAX = "pref_hr_max";
+    private static final String PREF_ZONE_COMFORT = "pref_zone_comfort";
+    private static final String PREF_ZONE_AEROBIC = "pref_zone_aerobic";
+    private static final String PREF_ZONE_ALARM = "pref_zone_alarm";
+    private static final int DEFAULT_HR_MAX = 175;
+    private static final int DEFAULT_ZONE_COMFORT = 60;
+    private static final int DEFAULT_ZONE_AEROBIC = 85;
+    private static final int DEFAULT_ZONE_ALARM = 86;
+    private static final int HR_MAX_MIN = 100;
+    private static final int HR_MAX_MAX = 220;
+    private static final int ZONE_PERCENT_MIN = 40;
+    private static final int ZONE_PERCENT_MAX = 100;
+    private static final int ZONE_WARNING_WINDOW = 5;
+
+    private Button hrSettingsButton;
+    private int hrMaxValue = DEFAULT_HR_MAX;
+    private int comfortZonePercent = DEFAULT_ZONE_COMFORT;
+    private int aerobicZonePercent = DEFAULT_ZONE_AEROBIC;
+    private int alarmZonePercent = DEFAULT_ZONE_ALARM;
+
+    private View zoneBackgroundTarget;
+    private int defaultBackgroundColor = Color.TRANSPARENT;
+    private boolean isZoneBlinking = false;
+    private boolean zoneBlinkState = false;
+    private int zoneBlinkPrimaryColor;
+    private int zoneBlinkSecondaryColor;
+    private Runnable zoneBlinkRunnable;
+    private int currentZoneState = -1;
+    private long lastZoneAnnouncementTime = 0L;
+    private int lastZoneAnnounced = -1;
+    private long lastTimerSpeakTimestamp = 0L;
+    private long lastZoneSpeakTimestamp = 0L;
+    private long lastZoneSettingsChangeTime = 0L;
+    
+    // Klasa pomocnicza do przechowywania punktów GPS
+    private static class TrackPoint {
+        double latitude;
+        double longitude;
+        double elevation;
+        long timestamp;
+        int heartRate;
+        
+        TrackPoint(double lat, double lon, double ele, long time, int hr) {
+            this.latitude = lat;
+            this.longitude = lon;
+            this.elevation = ele;
+            this.timestamp = time;
+            this.heartRate = hr;
+        }
+    }
     
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -152,10 +212,19 @@ public class MainActivity extends Activity {
         Log.d(TAG, "🔋 WakeLock zainicjalizowany");
         
         // Tworzę ScrollView + LinearLayout dla przewijania
-        ScrollView scrollView = new ScrollView(this);
+        scrollView = new ScrollView(this);
+        zoneBackgroundTarget = scrollView;
+        if (scrollView.getBackground() instanceof ColorDrawable) {
+            defaultBackgroundColor = ((ColorDrawable) scrollView.getBackground()).getColor();
+        } else {
+            defaultBackgroundColor = Color.TRANSPARENT;
+        }
+
         mainLayout = new LinearLayout(this);
         mainLayout.setOrientation(LinearLayout.VERTICAL);
         mainLayout.setPadding(30, 30, 30, 30);
+
+        loadHrZonePreferences();
         
         // Aktualny czas rzeczywisty
         currentTimeText = new TextView(this);
@@ -190,7 +259,7 @@ public class MainActivity extends Activity {
         
         // Tętno
         heartRateText = new TextView(this);
-        heartRateText.setText("❤️ Tętno: 0 BPM");
+        updateHeartRateDisplay(0);
         heartRateText.setTextSize(28);
         mainLayout.addView(heartRateText);
         
@@ -234,6 +303,25 @@ public class MainActivity extends Activity {
             }
         });
         mainLayout.addView(connectButton);
+
+        // Przycisk ustawień stref tętna
+        hrSettingsButton = new Button(this);
+        hrSettingsButton.setText(getHrSettingsButtonLabel());
+        GradientDrawable hrGradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        hrGradient.setCornerRadius(30);
+        hrSettingsButton.setBackground(hrGradient);
+        hrSettingsButton.setTextColor(0xFFFFFFFF);
+        hrSettingsButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showHrZoneSettingsDialog();
+            }
+        });
+        mainLayout.addView(hrSettingsButton);
+        updateHrSettingsButtonLabel();
         
         // SEPARATOR
         TextView separatorText = new TextView(this);
@@ -244,7 +332,7 @@ public class MainActivity extends Activity {
         
         // Przycisk wyboru typu timera
         timerTypeButton = new Button(this);
-        timerTypeButton.setText("🏆 Timer Treningowy ▼");
+        timerTypeButton.setText("🏆 Timer CrossFit ▼");
         GradientDrawable timerTypeGradient = new GradientDrawable(
             GradientDrawable.Orientation.TL_BR,
             new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
@@ -473,7 +561,43 @@ public class MainActivity extends Activity {
         // Przycisk TRENING BIEGOWY - będzie dodawany dynamicznie
         createRunningWorkoutButton();
         
-        // Przycisk zamknij aplikację
+        // Przycisk pokazywania trasy GPS
+        showMapButton = new Button(this);
+        showMapButton.setText("🗺️ POKAŻ TRASĘ");
+        showMapButton.setTextSize(14);
+        showMapButton.setVisibility(View.GONE); // Ukryty dopóki nie ma trasy
+        
+        GradientDrawable mapButtonDrawable = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{
+                Color.parseColor("#3d4a2c"),
+                Color.parseColor("#5a6b47"),
+                Color.parseColor("#3d4a2c")
+            }
+        );
+        mapButtonDrawable.setCornerRadius(30);
+        showMapButton.setBackground(mapButtonDrawable);
+        showMapButton.setTextColor(0xFFFFFFFF);
+        
+        LinearLayout.LayoutParams mapParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 120);
+        mapParams.setMargins(0, 20, 0, 0);
+        showMapButton.setLayoutParams(mapParams);
+        showMapButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (lastGpxPath != null) {
+                    Intent intent = new Intent(MainActivity.this, MapActivity.class);
+                    intent.putExtra("GPX_PATH", lastGpxPath);
+                    startActivity(intent);
+                } else {
+                    speak("Brak zapisanej trasy");
+                }
+            }
+        });
+        mainLayout.addView(showMapButton);
+        
+        // Przycisk zamknij aplikację - ZAWSZE NA KOŃCU
         closeAppButton = new Button(this);
         closeAppButton.setText("🚺 ZAMKNIJ");
         closeAppButton.setTextSize(12);
@@ -521,6 +645,8 @@ public class MainActivity extends Activity {
         // Dodaj layout do ScrollView
         scrollView.addView(mainLayout);
         setContentView(scrollView);
+        resetZoneFeedback();
+        updateHeartRateZoneUI();
         
         // Uruchom timer aktualizacji czasu
         startTimeUpdateTimer();
@@ -716,7 +842,9 @@ public class MainActivity extends Activity {
         }
         
         statusText.setText("Polar: Rozłączono");
-        heartRateText.setText("❤️ Tętno: 0 BPM");
+        currentHeartRate = 0;
+        updateHeartRateDisplay(0);
+        resetZoneFeedback();
         connectButton.setText("🎯 POŁĄCZ");
     }
     
@@ -744,7 +872,9 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         statusText.setText("Polar: Rozłączono");
-                        heartRateText.setText("❤️ Tętno: 0 BPM");
+                        currentHeartRate = 0;
+                        updateHeartRateDisplay(0);
+                        resetZoneFeedback();
                         connectButton.setText("🎯 POŁĄCZ");
                     }
                 });
@@ -832,8 +962,9 @@ public class MainActivity extends Activity {
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        heartRateText.setText("❤️ Tętno: " + heartRate + " BPM");
                         currentHeartRate = heartRate;
+                        updateHeartRateDisplay(heartRate);
+                        updateHeartRateZoneUI();
                         
                         // Aktualizuj statystyki treningu biegowego
                         if (isRunningWorkoutActive) {
@@ -1195,7 +1326,7 @@ public class MainActivity extends Activity {
     
     private void createRunningWorkoutButton() {
         runningWorkoutButton = new Button(this);
-        runningWorkoutButton.setText("🏃‍♂️ TRENING BIEGOWY");
+        runningWorkoutButton.setText("🏃 START TRENINGU");
         GradientDrawable runningGradient = new GradientDrawable(
             GradientDrawable.Orientation.TL_BR,
             new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
@@ -1216,7 +1347,7 @@ public class MainActivity extends Activity {
                         } else {
                             // Trening nieaktywny - natychmiastowy start
                             startRunningWorkout();
-                            runningWorkoutButton.setText("🛑 ZATRZYMAJ TRENING");
+                            runningWorkoutButton.setText("🛑 ZATRZYMAJ");
                             GradientDrawable redGradient = new GradientDrawable(
                                 GradientDrawable.Orientation.TL_BR,
                                 new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
@@ -1232,7 +1363,7 @@ public class MainActivity extends Activity {
                             // Przerwano przytrzymanie
                             isStopRunningPressActive = false;
                             handler.removeCallbacks(stopRunningCountdownRunnable);
-                            runningWorkoutButton.setText("🛑 ZATRZYMAJ TRENING");
+                            runningWorkoutButton.setText("🛑 ZATRZYMAJ");
                             GradientDrawable redGradient = new GradientDrawable(
                                 GradientDrawable.Orientation.TL_BR,
                                 new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
@@ -1331,17 +1462,456 @@ public class MainActivity extends Activity {
     }
     
     private void speak(String text) {
+        speakInternal(text, false);
+    }
+
+    private void speakZone(String text) {
+        speakInternal(text, true);
+    }
+
+    private void speakInternal(String text, boolean zoneMessage) {
         if (isTtsReady && tts != null) {
-            // Ustaw głośność na maksimum dla treningu
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC,
                 audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC), 0);
-            
-            // QUEUE_ADD - dodaje do kolejki zamiast przerywać poprzedni komunikat
-            tts.speak(text, TextToSpeech.QUEUE_ADD, null, null);
+
+            int queueMode = TextToSpeech.QUEUE_ADD;
+            String utteranceId = (zoneMessage ? "ZONE_" : "GEN_") + System.currentTimeMillis();
+            tts.speak(text, queueMode, null, utteranceId);
+            long now = System.currentTimeMillis();
+            if (zoneMessage) {
+                lastZoneSpeakTimestamp = now;
+            } else {
+                lastTimerSpeakTimestamp = now;
+            }
             Log.d(TAG, "🔊 TTS: " + text);
         } else {
             Log.w(TAG, "⚠️ TTS nie gotowy: " + text);
         }
+    }
+
+    private void showHrZoneSettingsDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Strefy tętna");
+
+        ScrollView dialogScroll = new ScrollView(this);
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setPadding(40, 30, 40, 30);
+
+        TextView intro = new TextView(this);
+        intro.setText("Dostosuj HRMAX i progi stref. Zmiana możliwa co 5 sekund, aby uniknąć przypadkowych kliknięć.");
+        intro.setTextSize(14);
+        intro.setPadding(0, 0, 0, 20);
+        container.addView(intro);
+
+        final List<Button> adjustmentButtons = new ArrayList<>();
+
+        final TextView hrValueView = new TextView(this);
+        final TextView comfortValueView = new TextView(this);
+        final TextView aerobicValueView = new TextView(this);
+        final TextView alarmValueView = new TextView(this);
+
+        container.addView(createZoneSettingRow("HRMAX", hrValueView,
+            () -> adjustHrMax(-1, adjustmentButtons, hrValueView, comfortValueView, aerobicValueView, alarmValueView),
+            () -> adjustHrMax(1, adjustmentButtons, hrValueView, comfortValueView, aerobicValueView, alarmValueView),
+            adjustmentButtons));
+
+        container.addView(createZoneSettingRow("Strefa komfortowa", comfortValueView,
+            () -> adjustComfortZone(-1, adjustmentButtons, hrValueView, comfortValueView, aerobicValueView, alarmValueView),
+            () -> adjustComfortZone(1, adjustmentButtons, hrValueView, comfortValueView, aerobicValueView, alarmValueView),
+            adjustmentButtons));
+
+        container.addView(createZoneSettingRow("Strefa tlenowa", aerobicValueView,
+            () -> adjustAerobicZone(-1, adjustmentButtons, hrValueView, comfortValueView, aerobicValueView, alarmValueView),
+            () -> adjustAerobicZone(1, adjustmentButtons, hrValueView, comfortValueView, aerobicValueView, alarmValueView),
+            adjustmentButtons));
+
+        container.addView(createZoneSettingRow("Strefa alarmowa", alarmValueView,
+            () -> adjustAlarmZone(-1, adjustmentButtons, hrValueView, comfortValueView, aerobicValueView, alarmValueView),
+            () -> adjustAlarmZone(1, adjustmentButtons, hrValueView, comfortValueView, aerobicValueView, alarmValueView),
+            adjustmentButtons));
+
+        refreshZoneSettingsViews(hrValueView, comfortValueView, aerobicValueView, alarmValueView);
+
+        dialogScroll.addView(container);
+        builder.setView(dialogScroll);
+        builder.setPositiveButton("Zamknij", null);
+        AlertDialog dialog = builder.create();
+        dialog.show();
+    }
+
+    private LinearLayout createZoneSettingRow(String label, TextView valueView,
+                                              Runnable onDecrease, Runnable onIncrease,
+                                              List<Button> buttonCollector) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, 10, 0, 10);
+
+        TextView name = new TextView(this);
+        name.setText(label);
+        name.setTextSize(16);
+        LinearLayout.LayoutParams nameParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        name.setLayoutParams(nameParams);
+        row.addView(name);
+
+        Button minusButton = createZoneAdjustButton("➖");
+        minusButton.setOnClickListener(v -> onDecrease.run());
+        row.addView(minusButton);
+        buttonCollector.add(minusButton);
+
+        valueView.setTextSize(18);
+        valueView.setPadding(30, 0, 30, 0);
+        row.addView(valueView);
+
+        Button plusButton = createZoneAdjustButton("➕");
+        plusButton.setOnClickListener(v -> onIncrease.run());
+        row.addView(plusButton);
+        buttonCollector.add(plusButton);
+
+        return row;
+    }
+
+    private Button createZoneAdjustButton(String label) {
+        Button button = new Button(this);
+        button.setText(label);
+        GradientDrawable gradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        gradient.setCornerRadius(30);
+        button.setBackground(gradient);
+        button.setTextColor(0xFFFFFFFF);
+        button.setPadding(40, 10, 40, 10);
+        button.setMinWidth(140);
+        return button;
+    }
+
+    private void adjustHrMax(int delta, List<Button> buttons, TextView hrValueView,
+                             TextView comfortValueView, TextView aerobicValueView, TextView alarmValueView) {
+        handleZoneSettingsChange(() -> {
+            hrMaxValue += delta;
+            if (hrMaxValue < HR_MAX_MIN) hrMaxValue = HR_MAX_MIN;
+            if (hrMaxValue > HR_MAX_MAX) hrMaxValue = HR_MAX_MAX;
+            ensureZoneThresholdsIntegrity();
+            saveHrZonePreferences();
+            updateHrSettingsButtonLabel();
+            refreshZoneSettingsViews(hrValueView, comfortValueView, aerobicValueView, alarmValueView);
+            updateHeartRateDisplay(currentHeartRate);
+            updateHeartRateZoneUI();
+        }, buttons);
+    }
+
+    private void adjustComfortZone(int delta, List<Button> buttons, TextView hrValueView,
+                                   TextView comfortValueView, TextView aerobicValueView, TextView alarmValueView) {
+        handleZoneSettingsChange(() -> {
+            comfortZonePercent += delta;
+            ensureZoneThresholdsIntegrity();
+            saveHrZonePreferences();
+            refreshZoneSettingsViews(hrValueView, comfortValueView, aerobicValueView, alarmValueView);
+            updateHeartRateZoneUI();
+        }, buttons);
+    }
+
+    private void adjustAerobicZone(int delta, List<Button> buttons, TextView hrValueView,
+                                   TextView comfortValueView, TextView aerobicValueView, TextView alarmValueView) {
+        handleZoneSettingsChange(() -> {
+            aerobicZonePercent += delta;
+            ensureZoneThresholdsIntegrity();
+            saveHrZonePreferences();
+            refreshZoneSettingsViews(hrValueView, comfortValueView, aerobicValueView, alarmValueView);
+            updateHeartRateZoneUI();
+        }, buttons);
+    }
+
+    private void adjustAlarmZone(int delta, List<Button> buttons, TextView hrValueView,
+                                 TextView comfortValueView, TextView aerobicValueView, TextView alarmValueView) {
+        handleZoneSettingsChange(() -> {
+            alarmZonePercent += delta;
+            ensureZoneThresholdsIntegrity();
+            saveHrZonePreferences();
+            refreshZoneSettingsViews(hrValueView, comfortValueView, aerobicValueView, alarmValueView);
+            updateHeartRateZoneUI();
+        }, buttons);
+    }
+
+    private void refreshZoneSettingsViews(TextView hrValueView, TextView comfortValueView,
+                                          TextView aerobicValueView, TextView alarmValueView) {
+        if (hrValueView != null) {
+            hrValueView.setText(hrMaxValue + " BPM");
+        }
+        if (comfortValueView != null) {
+            comfortValueView.setText(formatZoneValue(comfortZonePercent));
+        }
+        if (aerobicValueView != null) {
+            aerobicValueView.setText(formatZoneValue(aerobicZonePercent));
+        }
+        if (alarmValueView != null) {
+            alarmValueView.setText(formatZoneValue(alarmZonePercent));
+        }
+    }
+
+    private String formatZoneValue(int percent) {
+        int bpm = Math.round(hrMaxValue * percent / 100f);
+        return percent + "% (" + bpm + " BPM)";
+    }
+
+    private void handleZoneSettingsChange(Runnable changeAction, List<Button> buttons) {
+        long now = System.currentTimeMillis();
+        if (now - lastZoneSettingsChangeTime < 5000) {
+            if (statusText != null) {
+                statusText.setText("⏳ Odczekaj 5 sekund przed kolejną zmianą stref.");
+            }
+            return;
+        }
+        changeAction.run();
+        lastZoneSettingsChangeTime = now;
+        for (Button button : buttons) {
+            button.setEnabled(false);
+        }
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                for (Button button : buttons) {
+                    button.setEnabled(true);
+                }
+            }
+        }, 5000);
+    }
+
+    private void loadHrZonePreferences() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        hrMaxValue = prefs.getInt(PREF_HR_MAX, DEFAULT_HR_MAX);
+        comfortZonePercent = prefs.getInt(PREF_ZONE_COMFORT, DEFAULT_ZONE_COMFORT);
+        aerobicZonePercent = prefs.getInt(PREF_ZONE_AEROBIC, DEFAULT_ZONE_AEROBIC);
+        alarmZonePercent = prefs.getInt(PREF_ZONE_ALARM, DEFAULT_ZONE_ALARM);
+        ensureZoneThresholdsIntegrity();
+    }
+
+    private void saveHrZonePreferences() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        prefs.edit()
+            .putInt(PREF_HR_MAX, hrMaxValue)
+            .putInt(PREF_ZONE_COMFORT, comfortZonePercent)
+            .putInt(PREF_ZONE_AEROBIC, aerobicZonePercent)
+            .putInt(PREF_ZONE_ALARM, alarmZonePercent)
+            .apply();
+    }
+
+    private void ensureZoneThresholdsIntegrity() {
+        if (hrMaxValue < HR_MAX_MIN) hrMaxValue = HR_MAX_MIN;
+        if (hrMaxValue > HR_MAX_MAX) hrMaxValue = HR_MAX_MAX;
+
+        if (comfortZonePercent < ZONE_PERCENT_MIN) comfortZonePercent = ZONE_PERCENT_MIN;
+        if (comfortZonePercent > ZONE_PERCENT_MAX - 3) comfortZonePercent = ZONE_PERCENT_MAX - 3;
+
+        if (aerobicZonePercent <= comfortZonePercent) {
+            aerobicZonePercent = Math.min(comfortZonePercent + 1, ZONE_PERCENT_MAX - 1);
+        }
+        if (aerobicZonePercent > ZONE_PERCENT_MAX - 1) {
+            aerobicZonePercent = ZONE_PERCENT_MAX - 1;
+        }
+
+        if (alarmZonePercent <= aerobicZonePercent) {
+            alarmZonePercent = Math.min(aerobicZonePercent + 1, ZONE_PERCENT_MAX);
+        }
+        if (alarmZonePercent > ZONE_PERCENT_MAX) {
+            alarmZonePercent = ZONE_PERCENT_MAX;
+        }
+    }
+
+    private void updateHrSettingsButtonLabel() {
+        if (hrSettingsButton != null) {
+            hrSettingsButton.setText(getHrSettingsButtonLabel());
+        }
+    }
+
+    private String getHrSettingsButtonLabel() {
+        return String.format(Locale.getDefault(), "HRMAX:: %d", hrMaxValue);
+    }
+
+    private void updateHeartRateDisplay(int heartRate) {
+        if (heartRateText == null) {
+            return;
+        }
+        float percent = hrMaxValue > 0 ? (heartRate * 100f) / hrMaxValue : 0f;
+        if (percent < 0) {
+            percent = 0;
+        }
+        int percentInt = Math.round(percent);
+        String suffix = hrMaxValue > 0 ? " (" + percentInt + "% HRMAX)" : "";
+        heartRateText.setText("❤️ Tętno: " + heartRate + " BPM" + suffix);
+    }
+
+    private void updateHeartRateZoneUI() {
+        if (zoneBackgroundTarget == null) {
+            return;
+        }
+        if (currentHeartRate <= 0 || hrMaxValue <= 0) {
+            resetZoneFeedback();
+            return;
+        }
+
+        ensureZoneThresholdsIntegrity();
+
+        float percent = (currentHeartRate * 100f) / (float) hrMaxValue;
+        float comfort = comfortZonePercent;
+        float warningUpper = Math.min(comfort + ZONE_WARNING_WINDOW, aerobicZonePercent);
+        float aerobic = aerobicZonePercent;
+        float alarm = alarmZonePercent;
+
+        int newZone = determineCurrentZone(percent, comfort, warningUpper, aerobic, alarm);
+        currentZoneState = newZone;
+        applyZoneBackground(newZone, percent, comfort, warningUpper, aerobic, alarm);
+        maybeAnnounceZone(newZone);
+    }
+
+    private int determineCurrentZone(float percent, float comfort, float warningUpper, float aerobic, float alarm) {
+        if (percent <= comfort) {
+            return 0;
+        }
+        if (warningUpper > comfort && percent <= warningUpper) {
+            return 1;
+        }
+        if (percent < alarm) {
+            return 2;
+        }
+        return 3;
+    }
+
+    private void applyZoneBackground(int zone, float percent, float comfort, float warningUpper, float aerobic, float alarm) {
+        switch (zone) {
+            case 0:
+                stopZoneBlinking();
+                setZoneBackgroundColor(Color.parseColor("#1B5E20"));
+                break;
+            case 1:
+                startZoneBlinking(Color.parseColor("#2E7D32"), Color.parseColor("#1B5E20"));
+                break;
+            case 2:
+                stopZoneBlinking();
+                float span = Math.max(1f, alarm - warningUpper);
+                float ratio = (percent - warningUpper) / span;
+                if (ratio < 0f) ratio = 0f;
+                if (ratio > 1f) ratio = 1f;
+                int startColor = Color.parseColor("#2ECC71");
+                int endColor = Color.parseColor("#E67E22");
+                int blended = blendColors(startColor, endColor, ratio);
+                setZoneBackgroundColor(blended);
+                break;
+            case 3:
+                startZoneBlinking(Color.parseColor("#C0392B"), Color.parseColor("#922B21"));
+                break;
+            default:
+                stopZoneBlinking();
+                setZoneBackgroundColor(defaultBackgroundColor);
+                break;
+        }
+    }
+
+    private void startZoneBlinking(int primaryColor, int secondaryColor) {
+        if (zoneBackgroundTarget == null) {
+            return;
+        }
+        if (isZoneBlinking && zoneBlinkPrimaryColor == primaryColor && zoneBlinkSecondaryColor == secondaryColor) {
+            return;
+        }
+        stopZoneBlinking();
+        isZoneBlinking = true;
+        zoneBlinkPrimaryColor = primaryColor;
+        zoneBlinkSecondaryColor = secondaryColor;
+        zoneBlinkState = false;
+        if (zoneBlinkRunnable == null) {
+            zoneBlinkRunnable = new Runnable() {
+                @Override
+                public void run() {
+                    if (!isZoneBlinking) {
+                        return;
+                    }
+                    zoneBlinkState = !zoneBlinkState;
+                    setZoneBackgroundColor(zoneBlinkState ? zoneBlinkPrimaryColor : zoneBlinkSecondaryColor);
+                    handler.postDelayed(zoneBlinkRunnable, 500);
+                }
+            };
+        }
+        handler.post(zoneBlinkRunnable);
+    }
+
+    private void stopZoneBlinking() {
+        if (zoneBlinkRunnable != null) {
+            handler.removeCallbacks(zoneBlinkRunnable);
+        }
+        isZoneBlinking = false;
+        zoneBlinkState = false;
+    }
+
+    private void setZoneBackgroundColor(int color) {
+        if (zoneBackgroundTarget != null) {
+            zoneBackgroundTarget.setBackgroundColor(color);
+        }
+    }
+
+    private int blendColors(int colorFrom, int colorTo, float ratio) {
+        int alpha = (int) (Color.alpha(colorFrom) + ratio * (Color.alpha(colorTo) - Color.alpha(colorFrom)));
+        int red = (int) (Color.red(colorFrom) + ratio * (Color.red(colorTo) - Color.red(colorFrom)));
+        int green = (int) (Color.green(colorFrom) + ratio * (Color.green(colorTo) - Color.green(colorFrom)));
+        int blue = (int) (Color.blue(colorFrom) + ratio * (Color.blue(colorTo) - Color.blue(colorFrom)));
+        return Color.argb(alpha, red, green, blue);
+    }
+
+    private void maybeAnnounceZone(int zone) {
+        if (!isTtsReady || tts == null) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+
+        if (zone == 0) {
+            if (lastZoneAnnounced != zone) {
+                lastZoneAnnounced = zone;
+                lastZoneAnnouncementTime = now;
+                return;
+            }
+            if (now - lastZoneAnnouncementTime < 15000) {
+                return;
+            }
+            if (now - lastTimerSpeakTimestamp < 2000 || now - lastZoneSpeakTimestamp < 5000) {
+                return;
+            }
+            if (tts.isSpeaking()) {
+                return;
+            }
+            speakZone("Przyspiesz!!!");
+            lastZoneAnnouncementTime = now;
+        } else if (zone == 3) {
+            if (lastZoneAnnounced != zone) {
+                lastZoneAnnounced = zone;
+                lastZoneAnnouncementTime = now;
+                return;
+            }
+            if (now - lastZoneAnnouncementTime < 5000) {
+                return;
+            }
+            if (now - lastTimerSpeakTimestamp < 2000 || now - lastZoneSpeakTimestamp < 3000) {
+                return;
+            }
+            if (tts.isSpeaking()) {
+                return;
+            }
+            speakZone("Zwolnij, jesteś poza strefą pracy!!!");
+            lastZoneAnnouncementTime = now;
+        } else {
+            lastZoneAnnounced = -1;
+            lastZoneAnnouncementTime = 0L;
+        }
+    }
+
+    private void resetZoneFeedback() {
+        stopZoneBlinking();
+        setZoneBackgroundColor(defaultBackgroundColor);
+        currentZoneState = -1;
+        lastZoneAnnounced = -1;
+        lastZoneAnnouncementTime = 0L;
+        lastZoneSpeakTimestamp = 0L;
     }
     
     @Override
@@ -1491,6 +2061,7 @@ public class MainActivity extends Activity {
         heartRateSum = 0;
         heartRateCount = 0;
         maxHeartRate = 0;
+        gpsTrack.clear();
         locationListener = new LocationListener() {
             @Override
             public void onLocationChanged(Location location) {
@@ -1514,16 +2085,24 @@ public class MainActivity extends Activity {
         // Parametry: provider, minTime (ms), minDistance (m), listener
         // 500ms = co pół sekundy, 0m = każda zmiana pozycji
         try {
+            // Dodaj oba providery dla lepszego fix'a
             locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 500, 0, locationListener);
-            Log.d(TAG, "📍 GPS tracking włączony: 500ms, 0m minDistance");
+            locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 500, 0, locationListener);
+            Log.d(TAG, "📍 GPS + Network tracking włączony: 500ms, 0m minDistance");
+            Log.d(TAG, "📍 LocationListener: " + locationListener);
             
             // Próba pobrać ostatnią znaną lokalizację
             Location lastKnownLocation = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
             if (lastKnownLocation != null) {
-                Log.d(TAG, "📍 Ostatnia znana pozycja: " + lastKnownLocation.getLatitude() + ", " + lastKnownLocation.getLongitude());
+                Log.d(TAG, "📍 Ostatnia znana pozycja GPS: " + lastKnownLocation.getLatitude() + ", " + lastKnownLocation.getLongitude());
                 speak("Trening biegowy rozpoczęty. GPS aktywny");
             } else {
-                Log.d(TAG, "📍 Brak ostatniej znanej pozycji - oczekiwanie na GPS fix");
+                lastKnownLocation = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                if (lastKnownLocation != null) {
+                    Log.d(TAG, "📍 Ostatnia znana pozycja Network: " + lastKnownLocation.getLatitude() + ", " + lastKnownLocation.getLongitude());
+                } else {
+                    Log.d(TAG, "📍 Brak ostatniej znanej pozycji - oczekiwanie na GPS fix");
+                }
                 speak("Trening biegowy rozpoczęty. Ustalanie pozycji GPS");
             }
         } catch (SecurityException e) {
@@ -1543,8 +2122,20 @@ public class MainActivity extends Activity {
     private void updateRunningStats(Location location) {
         if (!isRunningWorkoutActive) return;
         
-        Log.d(TAG, "📍 GPS Update: lat=" + location.getLatitude() + ", lon=" + location.getLongitude() + 
-            ", accuracy=" + location.getAccuracy() + "m, speed=" + location.getSpeed() + "m/s");
+        Log.d(TAG, "📍 GPS Update RECEIVED: lat=" + location.getLatitude() + ", lon=" + location.getLongitude() + 
+            ", accuracy=" + location.getAccuracy() + "m, speed=" + location.getSpeed() + "m/s, provider=" + location.getProvider());
+        
+        // Zapisz punkt GPS do trasy
+        double elevation = location.hasAltitude() ? location.getAltitude() : 0.0;
+        TrackPoint point = new TrackPoint(
+            location.getLatitude(),
+            location.getLongitude(),
+            elevation,
+            location.getTime(),
+            currentHeartRate
+        );
+        gpsTrack.add(point);
+        Log.d(TAG, "✅ Punkt GPS dodany do trasy (total: " + gpsTrack.size() + ")");
         
         if (lastLocation != null) {
             // Oblicz dystans między punktami
@@ -1674,8 +2265,9 @@ public class MainActivity extends Activity {
         workoutTimerText.setText(report);
         speak("Trening biegowy zakończony");
         
-        // Zapisz do pliku
+        // Zapisz do plików
         saveRunningReport(report);
+        saveGPXTrack();
     }
     
     private void saveRunningReport(String report) {
@@ -1698,10 +2290,99 @@ public class MainActivity extends Activity {
             writer.close();
             
             Log.d(TAG, "💾 Raport zapisany: " + reportFile.getAbsolutePath());
-            speak("Raport zapisany do pliku");
             
         } catch (IOException e) {
             Log.e(TAG, "❌ Błąd zapisu raportu: " + e.getMessage());
+        }
+    }
+    
+    private void saveGPXTrack() {
+        if (gpsTrack.isEmpty()) {
+            Log.w(TAG, "⚠️ Brak punktów GPS do zapisania");
+            return;
+        }
+        
+        try {
+            File documentsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS);
+            File polarDir = new File(documentsDir, "PolarH10");
+            if (!polarDir.exists()) {
+                polarDir.mkdirs();
+            }
+            
+            String timestamp = new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault()).format(new Date());
+            String fileName = "trening_biegowy_" + timestamp + ".gpx";
+            File gpxFile = new File(polarDir, fileName);
+            
+            // Generuj GPX XML
+            StringBuilder gpx = new StringBuilder();
+            gpx.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+            gpx.append("<gpx version=\"1.1\" creator=\"PolarH10 Workout Tracker\"\n");
+            gpx.append("  xmlns=\"http://www.topografix.com/GPX/1/1\"\n");
+            gpx.append("  xmlns:gpxtpx=\"http://www.garmin.com/xmlschemas/TrackPointExtension/v1\">\n");
+            gpx.append("  <metadata>\n");
+            gpx.append("    <name>Trening Biegowy ").append(timestamp).append("</name>\n");
+            gpx.append("    <time>").append(new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.getDefault()).format(new Date())).append("</time>\n");
+            gpx.append("  </metadata>\n");
+            gpx.append("  <trk>\n");
+            gpx.append("    <name>Trening Biegowy</name>\n");
+            gpx.append("    <trkseg>\n");
+            
+            SimpleDateFormat isoFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.getDefault());
+            isoFormat.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            
+            for (TrackPoint point : gpsTrack) {
+                gpx.append("      <trkpt lat=\"").append(point.latitude).append("\" lon=\"").append(point.longitude).append("\">\n");
+                gpx.append("        <ele>").append(point.elevation).append("</ele>\n");
+                gpx.append("        <time>").append(isoFormat.format(new Date(point.timestamp))).append("</time>\n");
+                
+                if (point.heartRate > 0) {
+                    gpx.append("        <extensions>\n");
+                    gpx.append("          <gpxtpx:TrackPointExtension>\n");
+                    gpx.append("            <gpxtpx:hr>").append(point.heartRate).append("</gpxtpx:hr>\n");
+                    gpx.append("          </gpxtpx:TrackPointExtension>\n");
+                    gpx.append("        </extensions>\n");
+                }
+                
+                gpx.append("      </trkpt>\n");
+            }
+            
+            gpx.append("    </trkseg>\n");
+            gpx.append("  </trk>\n");
+            gpx.append("</gpx>\n");
+            
+            // Zapisz plik GPX
+            FileWriter writer = new FileWriter(gpxFile);
+            writer.write(gpx.toString());
+            writer.close();
+            
+            // Zapisz ścieżkę
+            final String savedPath = gpxFile.getAbsolutePath();
+            lastGpxPath = savedPath;
+            
+            Log.d(TAG, "💾 Trasa GPX zapisana: " + savedPath + " (" + gpsTrack.size() + " punktów)");
+            
+            // Pokaż przycisk na wątku UI
+            handler.post(new Runnable() {
+                @Override
+                public void run() {
+                    showMapButton.setVisibility(View.VISIBLE);
+                    Log.d(TAG, "✅ Przycisk POKAŻ TRASĘ widoczny");
+                    
+                    // Przewiń ScrollView na dół żeby pokazać przycisk
+                    scrollView.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            scrollView.fullScroll(View.FOCUS_DOWN);
+                            Log.d(TAG, "📜 ScrollView przewinięty na dół");
+                        }
+                    });
+                }
+            });
+            
+            speak("Trasa GPS zapisana. " + gpsTrack.size() + " punktów");
+            
+        } catch (IOException e) {
+            Log.e(TAG, "❌ Błąd zapisu GPX: " + e.getMessage());
         }
     }
 }
