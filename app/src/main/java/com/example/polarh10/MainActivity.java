@@ -11,6 +11,7 @@ import android.bluetooth.BluetoothGattCharacteristic;
 import android.bluetooth.BluetoothGattDescriptor;
 import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothProfile;
+import android.content.DialogInterface;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -26,10 +27,13 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Locale;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import android.speech.tts.TextToSpeech;
@@ -58,6 +62,9 @@ public class MainActivity extends Activity {
     private static final String HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb";
     private static final String HEART_RATE_MEASUREMENT_CHAR_UUID = "00002a37-0000-1000-8000-00805f9b34fb";
     private static final String CLIENT_CHARACTERISTIC_CONFIG_UUID = "00002902-0000-1000-8000-00805f9b34fb";
+    private static final String BATTERY_SERVICE_UUID = "0000180f-0000-1000-8000-00805f9b34fb";
+    private static final String BATTERY_LEVEL_CHAR_UUID = "00002a19-0000-1000-8000-00805f9b34fb";
+    private static final long BATTERY_POLL_INTERVAL_MS = 5 * 60 * 1000L;
     
     private TextView statusText;
     private TextView gpsStatusText;
@@ -155,6 +162,8 @@ public class MainActivity extends Activity {
     private int heartRateCount = 0;
     private int maxHeartRate = 0;
     private ArrayList<TrackPoint> gpsTrack = new ArrayList<>();
+    private int polarBatteryLevel = -1;
+    private Runnable batteryLevelPollRunnable;
 
     private static final int DEFAULT_GRADIENT_START = Color.parseColor("#3d4a2c");
     private static final int DEFAULT_GRADIENT_MID = Color.parseColor("#5a6b47");
@@ -691,16 +700,11 @@ public class MainActivity extends Activity {
         showMapButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (lastGpxPath != null) {
-                    Intent intent = new Intent(MainActivity.this, MapActivity.class);
-                    intent.putExtra("GPX_PATH", lastGpxPath);
-                    startActivity(intent);
-                } else {
-                    speak("Brak zapisanej trasy");
-                }
+                handleShowMapButtonClick();
             }
         });
         mainLayout.addView(showMapButton);
+        refreshMapButtonVisibility();
         
         // Przycisk zamknij aplikację - ZAWSZE NA KOŃCU
         closeAppButton = new Button(this);
@@ -1026,6 +1030,8 @@ public class MainActivity extends Activity {
                     gatt.close();
                 }
                 bluetoothGatt = null;
+                stopBatteryLevelUpdates();
+                polarBatteryLevel = -1;
                 
                 final boolean reconnectEnabled = isAutoReconnectEnabled;
                 Log.d(TAG, "🔍 isAutoReconnectEnabled = " + reconnectEnabled);
@@ -1038,6 +1044,7 @@ public class MainActivity extends Activity {
                         updateHeartRateDisplay(0);
                         resetZoneFeedback();
                         connectButton.setText("🎯 POŁĄCZ");
+                        updateCurrentTime();
                         
                         // Uruchom auto-reconnect jeśli włączony
                         Log.d(TAG, "🔍 Sprawdzam auto-reconnect: " + reconnectEnabled);
@@ -1116,6 +1123,8 @@ public class MainActivity extends Activity {
                         }
                     });
                 }
+
+                setupBatteryMonitoring();
             } else {
                 Log.e(TAG, "❌ Błąd odkrywania serwisów: " + status);
             }
@@ -1149,7 +1158,90 @@ public class MainActivity extends Activity {
                 });
             }
         }
+
+        @Override
+        public void onCharacteristicRead(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
+            if (status != BluetoothGatt.GATT_SUCCESS || characteristic == null) {
+                return;
+            }
+            if (BATTERY_LEVEL_CHAR_UUID.equalsIgnoreCase(characteristic.getUuid().toString())) {
+                Integer value = characteristic.getIntValue(BluetoothGattCharacteristic.FORMAT_UINT8, 0);
+                if (value == null) {
+                    return;
+                }
+                int clamped = Math.max(0, Math.min(100, value));
+                Log.d(TAG, "🔋 Poziom baterii Polar: " + clamped + "%");
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        polarBatteryLevel = clamped;
+                        updateCurrentTime();
+                    }
+                });
+            }
+        }
     };
+
+    private void setupBatteryMonitoring() {
+        if (bluetoothGatt == null) {
+            Log.w(TAG, "🔋 Nie mogę zainicjować monitoringu baterii - brak GATT");
+            return;
+        }
+        stopBatteryLevelUpdates();
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                boolean requestSent = requestBatteryLevel();
+                if (requestSent) {
+                    scheduleBatteryLevelPolling();
+                }
+            }
+        }, 1500);
+    }
+
+    private boolean requestBatteryLevel() {
+        if (bluetoothGatt == null) {
+            return false;
+        }
+        BluetoothGattService batteryService = bluetoothGatt.getService(java.util.UUID.fromString(BATTERY_SERVICE_UUID));
+        if (batteryService == null) {
+            Log.w(TAG, "🔋 Brak Battery Service w Polar H10");
+            return false;
+        }
+        BluetoothGattCharacteristic batteryCharacteristic = batteryService.getCharacteristic(
+            java.util.UUID.fromString(BATTERY_LEVEL_CHAR_UUID)
+        );
+        if (batteryCharacteristic == null) {
+            Log.w(TAG, "🔋 Brak Battery Level Characteristic");
+            return false;
+        }
+        boolean initiated = bluetoothGatt.readCharacteristic(batteryCharacteristic);
+        Log.d(TAG, initiated ? "🔋 Pytam o poziom baterii" : "❌ Nie mogę odczytać poziomu baterii");
+        return initiated;
+    }
+
+    private void scheduleBatteryLevelPolling() {
+        if (batteryLevelPollRunnable == null) {
+            batteryLevelPollRunnable = new Runnable() {
+                @Override
+                public void run() {
+                    if (bluetoothGatt == null) {
+                        return;
+                    }
+                    requestBatteryLevel();
+                    handler.postDelayed(this, BATTERY_POLL_INTERVAL_MS);
+                }
+            };
+        }
+        handler.removeCallbacks(batteryLevelPollRunnable);
+        handler.postDelayed(batteryLevelPollRunnable, BATTERY_POLL_INTERVAL_MS);
+    }
+
+    private void stopBatteryLevelUpdates() {
+        if (batteryLevelPollRunnable != null) {
+            handler.removeCallbacks(batteryLevelPollRunnable);
+        }
+    }
     
     /**
      * Parsowanie danych tętna z Polar H10
@@ -1181,8 +1273,15 @@ public class MainActivity extends Activity {
         SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
         String currentTime = sdf.format(new Date());
         if (currentTimeText != null) {
-            currentTimeText.setText("🕐 " + currentTime);
+            currentTimeText.setText("🕐 " + currentTime + getBatteryStatusSuffix());
         }
+    }
+
+    private String getBatteryStatusSuffix() {
+        if (polarBatteryLevel >= 0 && polarBatteryLevel <= 100) {
+            return String.format(Locale.getDefault(), " | 🔋 Polar: %d%%", polarBatteryLevel);
+        }
+        return " | 🔋 Polar: --%";
     }
     
     private void startTimeUpdateTimer() {
@@ -1500,6 +1599,7 @@ public class MainActivity extends Activity {
             hideRunningWorkoutButton();
         }
         Log.d(TAG, "Zmieniono typ timera na: " + selectedTimerType);
+        refreshMapButtonVisibility();
     }
     
     private void createRunningWorkoutButton() {
@@ -2540,6 +2640,10 @@ public class MainActivity extends Activity {
         isRunningWorkoutActive = true;
         setZoneMonitoringActive(true);
         startMainTimerCountdown(runningTimerMinutes * 60, "BIEG");
+        if (timerTypeButton != null) {
+            timerTypeButton.setEnabled(false);
+        }
+        refreshMapButtonVisibility();
         
         // Włącz WakeLock - utrzyma CPU włączony
         if (wakeLock != null && !wakeLock.isHeld()) {
@@ -2747,6 +2851,10 @@ public class MainActivity extends Activity {
         isRunningWorkoutActive = false;
         setZoneMonitoringActive(false);
         WorkoutForegroundService.stop(getApplicationContext());
+        if (timerTypeButton != null) {
+            timerTypeButton.setEnabled(true);
+        }
+        refreshMapButtonVisibility();
         
         // Wyłącz WakeLock
         if (wakeLock != null && wakeLock.isHeld()) {
@@ -2838,11 +2946,7 @@ public class MainActivity extends Activity {
         }
         
         try {
-            File documentsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS);
-            File polarDir = new File(documentsDir, "PolarH10");
-            if (!polarDir.exists()) {
-                polarDir.mkdirs();
-            }
+            File polarDir = getPolarDirectory();
             
             String timestamp = new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault()).format(new Date());
             String fileName = "trening_biegowy_" + timestamp + ".gpx";
@@ -2900,7 +3004,7 @@ public class MainActivity extends Activity {
             handler.post(new Runnable() {
                 @Override
                 public void run() {
-                    showMapButton.setVisibility(View.VISIBLE);
+                    refreshMapButtonVisibility();
                     Log.d(TAG, "✅ Przycisk POKAŻ TRASĘ widoczny");
                     
                     // Przewiń ScrollView na dół żeby pokazać przycisk
@@ -2919,5 +3023,100 @@ public class MainActivity extends Activity {
         } catch (IOException e) {
             Log.e(TAG, "❌ Błąd zapisu GPX: " + e.getMessage());
         }
+    }
+
+    private void handleShowMapButtonClick() {
+        if (isRunningWorkoutActive) {
+            speak("Najpierw zatrzymaj trening biegowy aby obejrzeć trasę");
+            return;
+        }
+        List<File> recentFiles = getRecentGpxFiles(10);
+        if (recentFiles.isEmpty()) {
+            speak("Brak zapisanej trasy");
+            return;
+        }
+        if (recentFiles.size() == 1) {
+            openMapForFile(recentFiles.get(0));
+            return;
+        }
+        showGpxSelectionDialog(recentFiles);
+    }
+
+    private List<File> getRecentGpxFiles(int limit) {
+        File polarDir = getPolarDirectory();
+        File[] files = polarDir.listFiles((dir, name) -> name != null && name.toLowerCase(Locale.US).endsWith(".gpx"));
+        if (files == null || files.length == 0) {
+            return Collections.emptyList();
+        }
+        Arrays.sort(files, new Comparator<File>() {
+            @Override
+            public int compare(File o1, File o2) {
+                return Long.compare(o2.lastModified(), o1.lastModified());
+            }
+        });
+        List<File> result = new ArrayList<>();
+        int count = Math.min(limit, files.length);
+        for (int i = 0; i < count; i++) {
+            result.add(files[i]);
+        }
+        return result;
+    }
+
+    private void showGpxSelectionDialog(final List<File> files) {
+        CharSequence[] labels = new CharSequence[files.size()];
+        for (int i = 0; i < files.size(); i++) {
+            labels[i] = formatGpxLabel(files.get(i));
+        }
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Wybierz trasę (ostatnie 10)");
+        builder.setItems(labels, new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                if (which >= 0 && which < files.size()) {
+                    openMapForFile(files.get(which));
+                }
+            }
+        });
+        builder.setNegativeButton("Anuluj", null);
+        builder.show();
+    }
+
+    private void openMapForFile(File file) {
+        if (file == null) {
+            speak("Błąd odczytu trasy");
+            return;
+        }
+        String path = file.getAbsolutePath();
+        lastGpxPath = path;
+        Intent intent = new Intent(MainActivity.this, MapActivity.class);
+        intent.putExtra("GPX_PATH", path);
+        startActivity(intent);
+    }
+
+    private void refreshMapButtonVisibility() {
+        if (showMapButton == null) {
+            return;
+        }
+        if (!"biegowy".equals(selectedTimerType) || isRunningWorkoutActive) {
+            showMapButton.setVisibility(View.GONE);
+            return;
+        }
+        boolean hasTracks = !getRecentGpxFiles(10).isEmpty();
+        showMapButton.setVisibility(hasTracks ? View.VISIBLE : View.GONE);
+    }
+
+    private String formatGpxLabel(File file) {
+        SimpleDateFormat labelFormat = new SimpleDateFormat("dd.MM HH:mm", Locale.getDefault());
+        String datePart = labelFormat.format(new Date(file.lastModified()));
+        return datePart + " • " + file.getName();
+    }
+
+    private File getPolarDirectory() {
+        File documentsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS);
+        File polarDir = new File(documentsDir, "PolarH10");
+        if (!polarDir.exists()) {
+            polarDir.mkdirs();
+        }
+        return polarDir;
     }
 }
