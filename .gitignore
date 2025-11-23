@@ -13,3 +13,21 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# VS Code
+.vscode/
+
+# Kotlin build errors
+.kotlin/
+
+# Screenshots
+screenshots/
+screenshot.png
+
+# Other projects
+InvoiceScanner/
+polar-sdk-sandbox/
+
+# Temporary files
+*.xml
+faktura.txt
