@@ -22,3 +22,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "polarh10"
 include(":app")
+include(":polar-sdk-sandbox")

@@ -96,6 +96,15 @@ public class MainActivity extends Activity {
     private LinearLayout mainLayout;
     private ScrollView scrollView;
     
+    // Running workout controls
+    private LinearLayout runningSettingsLayout;
+    private TextView runningTimeText;
+    private Button runningTimeMinusButton;
+    private Button runningTimePlusButton;
+    private TextView targetDistanceText;
+    private Button distanceMinusButton;
+    private Button distancePlusButton;
+    
     private BluetoothGatt bluetoothGatt;
     private Handler handler = new Handler();
     private int currentHeartRate = 0;
@@ -116,10 +125,13 @@ public class MainActivity extends Activity {
     private int countdownSeconds = 0;                 // odliczanie 10-sekund CrossFit
     private boolean isWorkoutActive = false;
     private boolean isCountdownActive = false;
+    private boolean isRunningCountdownActive = false; // odliczanie przed startem biegu
+    private int runningCountdownSeconds = 0;
     private boolean isStopPressed = false;
     private int stopPressCounter = 0;
     private static final int DEFAULT_RUNNING_TIMER_MINUTES = 60;
     private int runningTimerMinutes = DEFAULT_RUNNING_TIMER_MINUTES;
+    private double targetDistanceKm = 0.0; // 0 = bez limitu dystansu
     private int mainTimerRemainingSeconds = 0;
     private String mainTimerLabel = "GŁÓWNY";
     private boolean isMainTimerActive = false;
@@ -132,6 +144,10 @@ public class MainActivity extends Activity {
     // Zabezpieczenie przycisku zatrzymaj trening biegowy - przytrzymanie 5s
     private boolean isStopRunningPressActive = false;
     private long stopRunningPressStartTime = 0;
+    
+    // Zabezpieczenie anulowania odliczania biegowego - przytrzymanie 5s
+    private boolean isCancelCountdownPressActive = false;
+    private long cancelCountdownPressStartTime = 0;
     
     // Zabezpieczenie przycisku zamknij - przytrzymanie 5s
     private boolean isClosePressActive = false;
@@ -643,6 +659,112 @@ public class MainActivity extends Activity {
         
         mainLayout.addView(timerSettingsLayout);
         
+        // === Layout dla ustawień treningu biegowego ===
+        runningSettingsLayout = new LinearLayout(this);
+        runningSettingsLayout.setOrientation(LinearLayout.VERTICAL);
+        runningSettingsLayout.setPadding(20, 10, 20, 10);
+        runningSettingsLayout.setVisibility(View.GONE); // Ukryty domyślnie
+        
+        // Czas treningu biegowego
+        LinearLayout runningTimeLayout = new LinearLayout(this);
+        runningTimeLayout.setOrientation(LinearLayout.HORIZONTAL);
+        TextView runningTimeLabel = new TextView(this);
+        runningTimeLabel.setText("Czas treningu: ");
+        runningTimeLabel.setTextSize(16);
+        runningTimeLayout.addView(runningTimeLabel);
+        
+        runningTimeMinusButton = new Button(this);
+        runningTimeMinusButton.setText("➖");
+        GradientDrawable runningTimeMinusGradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        runningTimeMinusGradient.setCornerRadius(30);
+        runningTimeMinusButton.setBackground(runningTimeMinusGradient);
+        runningTimeMinusButton.setTextColor(0xFFFFFFFF);
+        runningTimeMinusButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                adjustRunningTime(-5);
+            }
+        });
+        runningTimeLayout.addView(runningTimeMinusButton);
+        
+        runningTimeText = new TextView(this);
+        runningTimeText.setText(runningTimerMinutes + " min");
+        runningTimeText.setTextSize(18);
+        runningTimeText.setPadding(30, 20, 30, 20);
+        runningTimeLayout.addView(runningTimeText);
+        
+        runningTimePlusButton = new Button(this);
+        runningTimePlusButton.setText("➕");
+        GradientDrawable runningTimePlusGradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        runningTimePlusGradient.setCornerRadius(30);
+        runningTimePlusButton.setBackground(runningTimePlusGradient);
+        runningTimePlusButton.setTextColor(0xFFFFFFFF);
+        runningTimePlusButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                adjustRunningTime(5);
+            }
+        });
+        runningTimeLayout.addView(runningTimePlusButton);
+        runningSettingsLayout.addView(runningTimeLayout);
+        
+        // Dystans docelowy (opcjonalny)
+        LinearLayout distanceLayout = new LinearLayout(this);
+        distanceLayout.setOrientation(LinearLayout.HORIZONTAL);
+        TextView distanceLabel = new TextView(this);
+        distanceLabel.setText("Dystans cel (km): ");
+        distanceLabel.setTextSize(16);
+        distanceLayout.addView(distanceLabel);
+        
+        distanceMinusButton = new Button(this);
+        distanceMinusButton.setText("➖");
+        GradientDrawable distanceMinusGradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        distanceMinusGradient.setCornerRadius(30);
+        distanceMinusButton.setBackground(distanceMinusGradient);
+        distanceMinusButton.setTextColor(0xFFFFFFFF);
+        distanceMinusButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                adjustTargetDistance(-1.0);
+            }
+        });
+        distanceLayout.addView(distanceMinusButton);
+        
+        targetDistanceText = new TextView(this);
+        targetDistanceText.setText(targetDistanceKm == 0 ? "∞" : String.format("%.1f", targetDistanceKm));
+        targetDistanceText.setTextSize(18);
+        targetDistanceText.setPadding(30, 20, 30, 20);
+        distanceLayout.addView(targetDistanceText);
+        
+        distancePlusButton = new Button(this);
+        distancePlusButton.setText("➕");
+        GradientDrawable distancePlusGradient = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            new int[]{Color.parseColor("#3d4a2c"), Color.parseColor("#5a6b47"), Color.parseColor("#3d4a2c")}
+        );
+        distancePlusGradient.setCornerRadius(30);
+        distancePlusButton.setBackground(distancePlusGradient);
+        distancePlusButton.setTextColor(0xFFFFFFFF);
+        distancePlusButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                adjustTargetDistance(1.0);
+            }
+        });
+        distanceLayout.addView(distancePlusButton);
+        runningSettingsLayout.addView(distanceLayout);
+        
+        mainLayout.addView(runningSettingsLayout);
+        
         // Timer treningu
         workoutTimerText = new TextView(this);
         workoutTimerText.setText("Gotowy do treningu!");
@@ -911,6 +1033,30 @@ public class MainActivity extends Activity {
         }
     };
     
+    // Runnable do odliczania 5s przed anulowaniem odliczania biegowego
+    private Runnable cancelCountdownRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!isCancelCountdownPressActive) {
+                return;
+            }
+            
+            long elapsedTime = System.currentTimeMillis() - cancelCountdownPressStartTime;
+            long remainingTime = 5000 - elapsedTime;
+            
+            if (remainingTime <= 0) {
+                // 5 sekund upłynęło - anuluj odliczanie
+                isCancelCountdownPressActive = false;
+                stopRunningWorkout();
+            } else {
+                // Aktualizuj tekst przycisku
+                int secondsLeft = (int) Math.ceil(remainingTime / 1000.0);
+                runningWorkoutButton.setText("⏱️ ANULUJ " + secondsLeft + "s");
+                handler.postDelayed(this, 100);
+            }
+        }
+    };
+    
     // Runnable do odliczania 5s przed zamknięciem aplikacji
     private Runnable closeCountdownRunnable = new Runnable() {
         @Override
@@ -1063,6 +1209,7 @@ public class MainActivity extends Activity {
         public void onServicesDiscovered(BluetoothGatt gatt, int status) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 Log.d(TAG, "🔍 Znaleziono serwisy GATT! Szukam Heart Rate...");
+                logGattServices(gatt);
                 
                 // Szukam serwisu Heart Rate
                 BluetoothGattService heartRateService = gatt.getService(java.util.UUID.fromString(HEART_RATE_SERVICE_UUID));
@@ -1242,6 +1389,34 @@ public class MainActivity extends Activity {
             handler.removeCallbacks(batteryLevelPollRunnable);
         }
     }
+
+    private void logGattServices(BluetoothGatt gatt) {
+        if (gatt == null) {
+            Log.w(TAG, "BLE: brak GATT do logowania serwisów");
+            return;
+        }
+        List<BluetoothGattService> services = gatt.getServices();
+        if (services == null || services.isEmpty()) {
+            Log.w(TAG, "BLE: brak serwisów GATT");
+            return;
+        }
+        Log.d(TAG, "BLE: znaleziono " + services.size() + " serwisów");
+        for (BluetoothGattService service : services) {
+            if (service == null) continue;
+            Log.d(TAG, "BLE Service: " + service.getUuid());
+            List<BluetoothGattCharacteristic> characteristics = service.getCharacteristics();
+            if (characteristics == null || characteristics.isEmpty()) {
+                Log.d(TAG, "  (brak charakterystyk)");
+                continue;
+            }
+            for (BluetoothGattCharacteristic ch : characteristics) {
+                if (ch == null) continue;
+                Log.d(TAG, String.format(Locale.getDefault(),
+                    "  └ Char: %s props=0x%02X",
+                    ch.getUuid(), ch.getProperties()));
+            }
+        }
+    }
     
     /**
      * Parsowanie danych tętna z Polar H10
@@ -1307,6 +1482,15 @@ public class MainActivity extends Activity {
         
         // Wyłącz przyciski ustawień
         timerTypeButton.setEnabled(false);
+        
+        // Zablokuj przyciski konfiguracji WORK/REST/ROUNDS
+        workoutMinusButton.setEnabled(false);
+        workoutPlusButton.setEnabled(false);
+        restMinusButton.setEnabled(false);
+        restPlusButton.setEnabled(false);
+        roundsMinusButton.setEnabled(false);
+        roundsPlusButton.setEnabled(false);
+        
         startWorkoutButton.setText("🛑 ZATRZYMAJ (przytrzymaj 5s)");
         
         // Rozpocznij odliczanie
@@ -1566,6 +1750,15 @@ public class MainActivity extends Activity {
         
         // Włącz przyciski
         timerTypeButton.setEnabled(true);
+        
+        // Odblokuj przyciski konfiguracji WORK/REST/ROUNDS
+        workoutMinusButton.setEnabled(true);
+        workoutPlusButton.setEnabled(true);
+        restMinusButton.setEnabled(true);
+        restPlusButton.setEnabled(true);
+        roundsMinusButton.setEnabled(true);
+        roundsPlusButton.setEnabled(true);
+        
         updateMainTimerDisplay();
         
         Log.d(TAG, "🔄 Interface zurückgesetzt für nächstes Training");
@@ -1576,8 +1769,9 @@ public class MainActivity extends Activity {
     private void toggleTimerType() {
         if (selectedTimerType.equals("treningowy")) {
             selectedTimerType = "biegowy";
-            timerTypeButton.setText("🏃 Timer Biegowy ▼");
+            timerTypeButton.setText("🏃 Timer Biegowy (wybieganie) ▼");
             timerSettingsLayout.setVisibility(View.GONE);
+            runningSettingsLayout.setVisibility(View.VISIBLE); // Pokaż kontrolki biegowe
             updateMainTimerDisplay();
             // Ukryj przyciski treningu treningowego
             startWorkoutButton.setVisibility(View.GONE);
@@ -1589,6 +1783,7 @@ public class MainActivity extends Activity {
             selectedTimerType = "treningowy";
             timerTypeButton.setText("🏋️‍♂️ Timer CrossFit ▼");
             timerSettingsLayout.setVisibility(View.VISIBLE);
+            runningSettingsLayout.setVisibility(View.GONE); // Ukryj kontrolki biegowe
             updateMainTimerDisplay();
             // Pokaż z powrotem przyciski treningu treningowego
             startWorkoutButton.setVisibility(View.VISIBLE);
@@ -1615,20 +1810,30 @@ public class MainActivity extends Activity {
                             isStopRunningPressActive = true;
                             stopRunningPressStartTime = System.currentTimeMillis();
                             handler.post(stopRunningCountdownRunnable);
+                        } else if (isRunningCountdownActive) {
+                            // Odliczanie aktywne - rozpocznij licznik anulowania
+                            isCancelCountdownPressActive = true;
+                            cancelCountdownPressStartTime = System.currentTimeMillis();
+                            handler.post(cancelCountdownRunnable);
                         } else {
                             // Trening nieaktywny - natychmiastowy start
-                            if (startRunningWorkout()) {
-                                setRunningButtonToStopState();
-                            }
+                            startRunningWorkout();
+                            setRunningButtonToStopState();
                         }
                         return true;
                         
                     case MotionEvent.ACTION_UP:
                     case MotionEvent.ACTION_CANCEL:
                         if (isStopRunningPressActive) {
-                            // Przerwano przytrzymanie
+                            // Przerwano przytrzymanie zatrzymania treningu
                             isStopRunningPressActive = false;
                             handler.removeCallbacks(stopRunningCountdownRunnable);
+                            setRunningButtonToStopState();
+                        }
+                        if (isCancelCountdownPressActive) {
+                            // Przerwano przytrzymanie anulowania odliczania
+                            isCancelCountdownPressActive = false;
+                            handler.removeCallbacks(cancelCountdownRunnable);
                             setRunningButtonToStopState();
                         }
                         return true;
@@ -1685,7 +1890,9 @@ public class MainActivity extends Activity {
             return;
         }
         if ("biegowy".equals(selectedTimerType)) {
-            setMainTimerIdleValue(runningTimerMinutes * 60, "BIEG");
+            // Dla biegu: wyświetl czas + dystans cel (jeśli ustawiony)
+            String distInfo = targetDistanceKm == 0 ? "" : String.format(" | Cel: %.1f km", targetDistanceKm);
+            setMainTimerIdleValue(runningTimerMinutes * 60, "BIEG" + distInfo);
         } else {
             setMainTimerIdleValue(getCrossfitTotalSeconds(), "GŁÓWNY");
         }
@@ -1785,6 +1992,25 @@ public class MainActivity extends Activity {
         roundsText.setText(String.valueOf(totalRounds));
         updateMainTimerDisplay();
         Log.d(TAG, "Rounds: " + totalRounds);
+    }
+    
+    private void adjustRunningTime(int changeMinutes) {
+        runningTimerMinutes += changeMinutes;
+        if (runningTimerMinutes < 5) runningTimerMinutes = 5;   // min 5 minut
+        if (runningTimerMinutes > 180) runningTimerMinutes = 180; // max 3 godziny
+        
+        runningTimeText.setText(runningTimerMinutes + " min");
+        updateMainTimerDisplay();
+        Log.d(TAG, "Running time: " + runningTimerMinutes + " min");
+    }
+    
+    private void adjustTargetDistance(double changeKm) {
+        targetDistanceKm += changeKm;
+        if (targetDistanceKm < 0) targetDistanceKm = 0.0;
+        if (targetDistanceKm > 100) targetDistanceKm = 100.0; // max 100km
+        
+        targetDistanceText.setText(targetDistanceKm == 0 ? "∞" : String.format("%.1f", targetDistanceKm));
+        Log.d(TAG, "Target distance: " + (targetDistanceKm == 0 ? "unlimited" : targetDistanceKm + " km"));
     }
     
     // ===== TTS METHODS =====
@@ -2207,9 +2433,8 @@ public class MainActivity extends Activity {
                     handler.post(new Runnable() {
                         @Override
                         public void run() {
-                            if (startRunningWorkout()) {
-                                setRunningButtonToStopState();
-                            }
+                            startRunningWorkout();
+                            setRunningButtonToStopState();
                         }
                     });
                 }
@@ -2236,9 +2461,8 @@ public class MainActivity extends Activity {
                 handler.post(new Runnable() {
                     @Override
                     public void run() {
-                        if (startRunningWorkout()) {
-                            setRunningButtonToStopState();
-                        }
+                        startRunningWorkout();
+                        setRunningButtonToStopState();
                     }
                 });
             } else if (!allGranted) {
@@ -2616,12 +2840,12 @@ public class MainActivity extends Activity {
     
     // ===== TRENING BIEGOWY - GPS TRACKING =====
     
-    private boolean startRunningWorkout() {
-        if (isRunningWorkoutActive) return false;
+    private void startRunningWorkout() {
+        if (isRunningWorkoutActive) return;
 
         if (!ensureRunningPermissions()) {
             pendingRunningStart = true;
-            return false;
+            return;
         }
         pendingRunningStart = false;
         
@@ -2633,16 +2857,69 @@ public class MainActivity extends Activity {
             speak("Ostrzeżenie! GPS nie jest włączony. Włącz GPS w ustawieniach.");
             workoutTimerText.setText("⚠️ GPS NIE WŁĄCZONY!\nWłącz GPS w ustawieniach telefonu");
             Log.e(TAG, "❌ GPS_PROVIDER nie jest dostępny lub wyłączony!");
-            return false;
+            return;
         }
         
+        // Rozpocznij odliczanie 30 sekund
+        Log.d(TAG, "🏃‍♂️ Rozpoczynam odliczanie przed biegiem (30 sekund)");
+        isRunningCountdownActive = true;
+        runningCountdownSeconds = 30;
+        
+        // Zablokuj przyciski konfiguracji treningu biegowego
+        runningTimeMinusButton.setEnabled(false);
+        runningTimePlusButton.setEnabled(false);
+        distanceMinusButton.setEnabled(false);
+        distancePlusButton.setEnabled(false);
+        if (timerTypeButton != null) {
+            timerTypeButton.setEnabled(false);
+        }
+        
+        // Rozpocznij odliczanie
+        runningCountdownTick();
+    }
+    
+    private void runningCountdownTick() {
+        if (runningCountdownSeconds > 0) {
+            workoutTimerText.setText("🏃 START za: " + runningCountdownSeconds + "s");
+            
+            // TTS odliczanie - tylko ostatnie 10 sekund
+            if (runningCountdownSeconds <= 10 && runningCountdownSeconds > 5) {
+                speak(String.valueOf(runningCountdownSeconds));
+            } else if (runningCountdownSeconds <= 5) {
+                speak(String.valueOf(runningCountdownSeconds));
+            }
+            
+            runningCountdownSeconds--;
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    runningCountdownTick();
+                }
+            }, 1000);
+        } else {
+            // Koniec odliczania - rozpocznij trening!
+            workoutTimerText.setText("🔥 START! 🔥");
+            speak("Start!");
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    startActualRunningWorkout();
+                }
+            }, 500);
+        }
+    }
+    
+    private void startActualRunningWorkout() {
         Log.d(TAG, "🏃‍♂️ ROZPOCZYNAM TRENING BIEGOWY z GPS");
+        isRunningCountdownActive = false;
         isRunningWorkoutActive = true;
         setZoneMonitoringActive(true);
         startMainTimerCountdown(runningTimerMinutes * 60, "BIEG");
         if (timerTypeButton != null) {
             timerTypeButton.setEnabled(false);
         }
+        
+        // Przyciski już zablokowane podczas odliczania
         refreshMapButtonVisibility();
         
         // Włącz WakeLock - utrzyma CPU włączony
@@ -2712,13 +2989,12 @@ public class MainActivity extends Activity {
             }
             setRunningButtonToStartState();
             updateMainTimerDisplay();
-            return false;
+            return;
         }
         
         // Komunikat już został wywołany wyżej (zależnie od lastKnownLocation)
         updateRunningInterface();
         WorkoutForegroundService.start(getApplicationContext(), "Trening biegowy aktywny");
-        return true;
     }
     
     private void updateRunningStats(Location location) {
@@ -2779,15 +3055,22 @@ public class MainActivity extends Activity {
         double distanceKm = totalDistance / 1000.0;
         String pace = calculatePace(distanceKm, elapsedTime);
 
+        String distanceInfo;
+        if (targetDistanceKm > 0) {
+            distanceInfo = String.format("📏 Dystans: %.2f km / %.1f km", distanceKm, targetDistanceKm);
+        } else {
+            distanceInfo = String.format("📏 Dystans: %.2f km", distanceKm);
+        }
+
         String stats = String.format(
             "🏃‍♂️ TRENING BIEGOWY AKTYWNY\n" +
             "💓 Puls: %d bpm\n" +
-            "📏 Dystans: %.2f km\n" +
+            "%s\n" +
             "⚡ Tempo: %s min/km\n" +
             "⏱️ Pozostało: %02d:%02d\n" +
             "🕒 Upłynęło: %02d:%02d",
             currentHeartRate,
-            distanceKm,
+            distanceInfo,
             pace,
             remainingMinutes, remainingSecondsPart,
             elapsedMinutes, elapsedSeconds
@@ -2795,6 +3078,15 @@ public class MainActivity extends Activity {
 
         workoutTimerText.setText(stats);
         updateRunningNotificationSummary(distanceKm, pace, remainingMinutes, remainingSecondsPart);
+        
+        // Sprawdź czy osiągnięto dystans docelowy
+        if (targetDistanceKm > 0 && distanceKm >= targetDistanceKm) {
+            Log.d(TAG, "🎉 OSIĄGNIĘTO DYSTANS DOCELOWY: " + targetDistanceKm + " km!");
+            speak("Dystans docelowy osiągnięty!");
+            stopRunningWorkout();
+            return;
+        }
+        
         Log.d(
             TAG,
             "🔄 GPS Update: elapsed=" + elapsedMinutes + ":" + String.format("%02d", elapsedSeconds) +
@@ -2839,6 +3131,27 @@ public class MainActivity extends Activity {
     }
     
     private void stopRunningWorkout() {
+        // Jeśli odliczanie jest aktywne - anuluj je
+        if (isRunningCountdownActive) {
+            Log.d(TAG, "🛑 ANULOWANO ODLICZANIE przed biegiem");
+            isRunningCountdownActive = false;
+            handler.removeCallbacksAndMessages(null); // Usuń wszystkie callbacki
+            workoutTimerText.setText("🏃‍♂️ Gotowy do treningu biegowego");
+            
+            // Odblokuj przyciski
+            runningTimeMinusButton.setEnabled(true);
+            runningTimePlusButton.setEnabled(true);
+            distanceMinusButton.setEnabled(true);
+            distancePlusButton.setEnabled(true);
+            if (timerTypeButton != null) {
+                timerTypeButton.setEnabled(true);
+            }
+            
+            setRunningButtonToStartState();
+            updateMainTimerDisplay();
+            return;
+        }
+        
         if (!isRunningWorkoutActive) {
             stopMainTimerCountdown();
             updateMainTimerDisplay();
@@ -2854,6 +3167,13 @@ public class MainActivity extends Activity {
         if (timerTypeButton != null) {
             timerTypeButton.setEnabled(true);
         }
+        
+        // Odblokuj przyciski konfiguracji treningu biegowego
+        runningTimeMinusButton.setEnabled(true);
+        runningTimePlusButton.setEnabled(true);
+        distanceMinusButton.setEnabled(true);
+        distancePlusButton.setEnabled(true);
+        
         refreshMapButtonVisibility();
         
         // Wyłącz WakeLock

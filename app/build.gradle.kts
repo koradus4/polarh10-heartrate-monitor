@@ -56,11 +56,13 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     
     // Polar SDK dla komunikacji z Polar H10
-    implementation("com.github.polarofficial:polar-ble-sdk:5.5.0")
+    implementation(libs.polar.ble.sdk)
     
     // RxJava dla Polar SDK
-    implementation("io.reactivex.rxjava3:rxjava:3.1.5")
-    implementation("io.reactivex.rxjava3:rxandroid:3.0.0")
+    implementation(libs.rxjava3)
+    implementation(libs.rxandroid3)
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.coroutines.android)
     
     // OpenStreetMap dla wyświetlania tras GPS
     implementation("org.osmdroid:osmdroid-android:6.1.18")
