@@ -6,11 +6,11 @@ plugins {
 // Komentarz żeby wymusić sync
 
 android {
-    namespace = "com.example.polarh10"
+    namespace = "pl.fitness.polarh10"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.polarh10"
+        applicationId = "pl.fitness.polarh10"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
