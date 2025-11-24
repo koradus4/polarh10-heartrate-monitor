@@ -22,6 +22,15 @@ android {
     lint {
         abortOnError = false
     }
+    
+    signingConfigs {
+        create("release") {
+            storeFile = file("../polarh10-release.keystore")
+            storePassword = "polarh10key"
+            keyAlias = "polarh10"
+            keyPassword = "polarh10key"
+        }
+    }
 
     buildTypes {
         release {
@@ -30,6 +39,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
