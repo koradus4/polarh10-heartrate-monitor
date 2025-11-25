@@ -929,13 +929,13 @@ public class MainActivity extends Activity {
     }
     
     private void autoConnectPolarAndGPS() {
-        Log.d(TAG, "🚀 AUTO-CONNECT: Rozpoczynam automatyczne połączenia...");
+        Log.d(TAG, "🚀 AUTO-CONNECT: Zatrzymane - użytkownik musi kliknąć 'POŁĄCZ' ręcznie");
         
-        // Włącz auto-reconnect
-        isAutoReconnectEnabled = true;
+        // AUTO-CONNECT WYŁĄCZONY - pozwala na bardziej niezawodne działanie
+        // Użytkownik kliknie przycisk "POŁĄCZ" żeby się podłączyć
         
-        // 1. Połącz z Polar H10
-        connectToPolar();
+        // 1. Pominąć auto-connect Polar H10 - niech użytkownik zdecyduje
+        // connectToPolar(); // DISABLED
         
         // 2. Inicjalizuj GPS (sprawdzenie czy włączony)
         handler.postDelayed(new Runnable() {
@@ -943,7 +943,7 @@ public class MainActivity extends Activity {
             public void run() {
                 checkGPSStatus();
             }
-        }, 2000); // Poczekaj 2s na połączenie Polar
+        }, 1000); // Sprawdź GPS bez czekania na Polar
     }
     
     private void checkGPSStatus() {
@@ -2020,15 +2020,16 @@ public class MainActivity extends Activity {
             @Override
             public void onInit(int status) {
                 if (status == TextToSpeech.SUCCESS) {
-                    // Spróbuj użyć polskiego, jeśli dostępny
-                    int result = tts.setLanguage(new Locale("pl", "PL"));
+                    // Używaj systemowego locale (automatycznie dostosuje się do języka urządzenia)
+                    Locale systemLocale = Locale.getDefault();
+                    int result = tts.setLanguage(systemLocale);
                     if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                        Log.w(TAG, "⚠️ Polski TTS niedostępny, używam angielskiego");
+                        Log.w(TAG, "⚠️ Język systemowy (" + systemLocale + ") niedostępny, używam angielskiego");
                         tts.setLanguage(Locale.US);
                     }
                     isTtsReady = true;
                     speak("Gotowy do treningu!");
-                    Log.d(TAG, "✅ TTS zainicjalizowany");
+                    Log.d(TAG, "✅ TTS zainicjalizowany z locale: " + systemLocale);
                 } else {
                     Log.e(TAG, "❌ Błąd inicjalizacji TTS");
                 }
