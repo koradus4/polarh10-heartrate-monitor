@@ -2020,22 +2020,22 @@ public class MainActivity extends Activity {
             @Override
             public void onInit(int status) {
                 if (status == TextToSpeech.SUCCESS) {
-                    // Spróbuj użyć systemowego locale, fallback na polski
-                    Locale systemLocale = Locale.getDefault();
-                    int result = tts.setLanguage(systemLocale);
+                    // Priorytet: polski > system locale > angielski
+                    int result = tts.setLanguage(new Locale("pl", "PL"));
                     
-                    // Jeśli systemowy locale nie działa, spróbuj polski
                     if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                        Log.w(TAG, "⚠️ Język systemowy niedostępny, próbuję polski");
-                        result = tts.setLanguage(new Locale("pl", "PL"));
+                        Log.w(TAG, "⚠️ Polski niedostępny, próbuję locale systemowe");
+                        Locale systemLocale = Locale.getDefault();
+                        result = tts.setLanguage(systemLocale);
+                        
                         if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                            Log.w(TAG, "⚠️ Polski niedostępny, używam angielskiego");
+                            Log.w(TAG, "⚠️ Locale systemowe niedostępne, używam angielskiego");
                             tts.setLanguage(Locale.US);
                         }
                     }
                     isTtsReady = true;
                     speak("Gotowy do treningu!");
-                    Log.d(TAG, "✅ TTS zainicjalizowany z locale: " + systemLocale);
+                    Log.d(TAG, "✅ TTS zainicjalizowany");
                 } else {
                     Log.e(TAG, "❌ Błąd inicjalizacji TTS");
                 }
