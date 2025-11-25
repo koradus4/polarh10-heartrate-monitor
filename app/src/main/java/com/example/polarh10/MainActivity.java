@@ -2020,12 +2020,18 @@ public class MainActivity extends Activity {
             @Override
             public void onInit(int status) {
                 if (status == TextToSpeech.SUCCESS) {
-                    // Używaj systemowego locale (automatycznie dostosuje się do języka urządzenia)
+                    // Spróbuj użyć systemowego locale, fallback na polski
                     Locale systemLocale = Locale.getDefault();
                     int result = tts.setLanguage(systemLocale);
+                    
+                    // Jeśli systemowy locale nie działa, spróbuj polski
                     if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                        Log.w(TAG, "⚠️ Język systemowy (" + systemLocale + ") niedostępny, używam angielskiego");
-                        tts.setLanguage(Locale.US);
+                        Log.w(TAG, "⚠️ Język systemowy niedostępny, próbuję polski");
+                        result = tts.setLanguage(new Locale("pl", "PL"));
+                        if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                            Log.w(TAG, "⚠️ Polski niedostępny, używam angielskiego");
+                            tts.setLanguage(Locale.US);
+                        }
                     }
                     isTtsReady = true;
                     speak("Gotowy do treningu!");
