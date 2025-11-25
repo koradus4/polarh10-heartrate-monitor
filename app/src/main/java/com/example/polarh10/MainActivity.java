@@ -1,4 +1,4 @@
-package com.example.polarh10;
+package pl.fitness.polarh10;
 
 import android.Manifest;
 import android.app.Activity;
@@ -881,11 +881,11 @@ public class MainActivity extends Activity {
     
     private void requestBluetoothPermissions() {
         String[] permissions = {
-            "android.permission.BLUETOOTH",
-            "android.permission.BLUETOOTH_ADMIN", 
-            "android.permission.ACCESS_FINE_LOCATION",
-            "android.permission.BLUETOOTH_SCAN",
-            "android.permission.BLUETOOTH_CONNECT"
+            Manifest.permission.BLUETOOTH,
+            Manifest.permission.BLUETOOTH_ADMIN, 
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_CONNECT
         };
         
         ActivityCompat.requestPermissions(this, permissions, 1);

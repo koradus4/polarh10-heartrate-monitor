@@ -1,4 +1,4 @@
-package com.example.polarh10;
+package pl.fitness.polarh10;
 
 import android.app.Activity;
 import android.graphics.Color;

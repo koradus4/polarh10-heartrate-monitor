@@ -1,4 +1,4 @@
-package com.example.polarh10;
+package pl.fitness.polarh10;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -21,8 +21,8 @@ public class WorkoutForegroundService extends Service {
 
     private static final String CHANNEL_ID = "workout_channel";
     private static final int NOTIFICATION_ID = 101;
-    private static final String ACTION_UPDATE = "com.example.polarh10.action.UPDATE";
-    private static final String ACTION_STOP = "com.example.polarh10.action.STOP";
+    private static final String ACTION_UPDATE = "pl.fitness.polarh10.action.UPDATE";
+    private static final String ACTION_STOP = "pl.fitness.polarh10.action.STOP";
     private static final String EXTRA_CONTENT = "extra_content";
     private boolean isInForeground = false;
 
