@@ -51,6 +51,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.content.Intent;
+import android.widget.Toast;
 
 public class MainActivity extends Activity {
     
@@ -2026,14 +2027,19 @@ public class MainActivity extends Activity {
                     
                     if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
                         Log.w(TAG, "⚠️ Polski TTS niedostępny na tym urządzeniu, próbuję locale systemowe");
+                        Toast.makeText(MainActivity.this, "⚠️ Polski TTS niedostępny - przełączam na inny język", Toast.LENGTH_LONG).show();
+                        
                         Locale systemLocale = Locale.getDefault();
                         result = tts.setLanguage(systemLocale);
                         activeLang = systemLocale.getDisplayLanguage();
                         
                         if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
                             Log.w(TAG, "⚠️ Locale systemowe niedostępne, używam angielskiego (fallback)");
+                            Toast.makeText(MainActivity.this, "ℹ️ TTS: Using English", Toast.LENGTH_LONG).show();
                             tts.setLanguage(Locale.US);
                             activeLang = "Angielski";
+                        } else {
+                            Toast.makeText(MainActivity.this, "ℹ️ TTS: " + activeLang, Toast.LENGTH_SHORT).show();
                         }
                     }
                     isTtsReady = true;
@@ -2041,6 +2047,7 @@ public class MainActivity extends Activity {
                     Log.d(TAG, "✅ TTS zainicjalizowany. Aktywny język: " + activeLang);
                 } else {
                     Log.e(TAG, "❌ Błąd inicjalizacji TTS");
+                    Toast.makeText(MainActivity.this, "❌ Błąd TTS - komunikaty głosowe wyłączone", Toast.LENGTH_LONG).show();
                 }
             }
         });
