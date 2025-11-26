@@ -1589,9 +1589,7 @@ public class MainActivity extends Activity {
             Log.d(TAG, "🔋 WakeLock włączony - CPU pozostanie aktywny");
         }
         
-        // Zapisz aktualną głośność (TTS będzie używał ustawień użytkownika)
-        originalVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
-        Log.d(TAG, "🎧 Zapisano oryginalną głośność: " + originalVolume + ", TTS będzie na: " + ttsVolumePercent + "%");
+        Log.d(TAG, "🎧 TTS będzie używał głośności: " + ttsVolumePercent + "%");
         
         // Ustaw czas dla pierwszej fazy (workout)
         workoutTimeLeftSeconds = workoutTimeMinutes * 60;
@@ -1739,13 +1737,6 @@ public class MainActivity extends Activity {
             Log.d(TAG, "🔋 WakeLock wyłączony");
         }
         
-        // Przywróć pierwotną głośność
-        if (originalVolume != -1) {
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, originalVolume, 0);
-            Log.d(TAG, "🔊 Głośność przywrócona do: " + originalVolume);
-            originalVolume = -1;
-        }
-        
         // TTS zatrzymanie
         speak("Trening zatrzymany");
         
@@ -1762,13 +1753,6 @@ public class MainActivity extends Activity {
         if (wakeLock != null && wakeLock.isHeld()) {
             wakeLock.release();
             Log.d(TAG, "🔋 WakeLock wyłączony");
-        }
-        
-        // Przywróć pierwotną głośność
-        if (originalVolume != -1) {
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, originalVolume, 0);
-            Log.d(TAG, "🔊 Głośność przywrócona do: " + originalVolume);
-            originalVolume = -1;
         }
         
         workoutTimerText.setText("🎉 TRENING SKOŃCZONY! 🎉");
@@ -2130,8 +2114,17 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 int testVolume = seekBar.getProgress() * 10;
-                applyTtsVolume(testVolume);
+                // Tymczasowo zapisz testową głośność
+                int savedVolume = ttsVolumePercent;
+                ttsVolumePercent = testVolume;
                 speak("Testowanie głośności TTS na poziomie " + testVolume + " procent");
+                // Przywróć poprzednią wartość (test nie zapisuje na stałe)
+                handler.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        ttsVolumePercent = savedVolume;
+                    }
+                }, 100);
             }
         });
         LinearLayout.LayoutParams testButtonParams = new LinearLayout.LayoutParams(
@@ -2156,15 +2149,6 @@ public class MainActivity extends Activity {
         
         builder.setNegativeButton("Anuluj", null);
         builder.show();
-    }
-    
-    private void applyTtsVolume(int volumePercent) {
-        if (audioManager != null) {
-            int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-            int targetVolume = (maxVolume * volumePercent) / 100;
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0);
-            Log.d(TAG, "🔊 Ustawiono głośność: " + volumePercent + "% (" + targetVolume + "/" + maxVolume + ")");
-        }
     }
     
     // ===== TTS METHODS =====
@@ -2216,19 +2200,24 @@ public class MainActivity extends Activity {
 
     private void speakInternal(String text, boolean zoneMessage) {
         if (isTtsReady && tts != null) {
-            // Ustaw głośność według preferencji użytkownika (zamiast MAX)
-            applyTtsVolume(ttsVolumePercent);
-
+            // Ustaw głośność według preferencji użytkownika
+            float volumeFloat = ttsVolumePercent / 100.0f; // 0.0 - 1.0
+            
+            // Bundle z parametrami głośności dla TTS
+            android.os.Bundle params = new android.os.Bundle();
+            params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volumeFloat);
+            
             int queueMode = TextToSpeech.QUEUE_ADD;
             String utteranceId = (zoneMessage ? "ZONE_" : "GEN_") + System.currentTimeMillis();
-            tts.speak(text, queueMode, null, utteranceId);
+            tts.speak(text, queueMode, params, utteranceId);
+            
             long now = System.currentTimeMillis();
             if (zoneMessage) {
                 lastZoneSpeakTimestamp = now;
             } else {
                 lastTimerSpeakTimestamp = now;
             }
-            Log.d(TAG, "🔊 TTS (" + ttsVolumePercent + "%): " + text);
+            Log.d(TAG, "🔊 TTS (" + ttsVolumePercent + "%, vol=" + volumeFloat + "): " + text);
         } else {
             Log.w(TAG, "⚠️ TTS nie gotowy: " + text);
         }
@@ -2782,13 +2771,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
-        // Przywróć pierwotną głośność TYLKO gdy trening NIE jest aktywny
-        if (!isWorkoutActive && !isRunningWorkoutActive && originalVolume != -1) {
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, originalVolume, 0);
-            Log.d(TAG, "🔊 PAUSE: Głośność przywrócona do: " + originalVolume);
-        } else {
-            Log.d(TAG, "🔊 PAUSE: Trening aktywny - głośność nie zmieniona");
-        }
+        Log.d(TAG, "⏸️ PAUSE: Aplikacja zminimalizowana");
     }
     
     @Override
@@ -2922,12 +2905,6 @@ public class MainActivity extends Activity {
         if (wakeLock != null && wakeLock.isHeld()) {
             wakeLock.release();
             Log.d(TAG, "🔋 WakeLock zwolniony");
-        }
-        
-        // Przywróć pierwotną głośność przy zamknięciu aplikacji
-        if (originalVolume != -1) {
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, originalVolume, 0);
-            Log.d(TAG, "🔊 ZAMKNIĘCIE: Głośność przywrócona do: " + originalVolume);
         }
         
         // Zwolnij TTS
