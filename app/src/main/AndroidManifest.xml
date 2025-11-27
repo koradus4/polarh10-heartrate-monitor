@@ -47,6 +47,11 @@
             android:name=".MapActivity"
             android:exported="false"
             android:label="Mapa Treningu" />
+        
+        <activity
+            android:name=".CustomWorkoutActivity"
+            android:exported="false"
+            android:label="Konfigurator Treningu" />
 
         <service
             android:name=".WorkoutForegroundService"

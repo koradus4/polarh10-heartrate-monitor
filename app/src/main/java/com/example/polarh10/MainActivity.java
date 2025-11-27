@@ -21,6 +21,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.provider.Settings;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.widget.Button;
@@ -97,6 +98,8 @@ public class MainActivity extends Activity {
     private Button closeAppButton;
     private Button showMapButton;
     private Button volumeButton;
+    private Button configuratorButton;
+    private Button customStartStopButton;
     private LinearLayout mainLayout;
     private ScrollView scrollView;
     
@@ -140,6 +143,25 @@ public class MainActivity extends Activity {
     private String mainTimerLabel = "GŁÓWNY";
     private boolean isMainTimerActive = false;
     private Runnable mainTimerRunnable;
+    
+    // Custom Workout CROSSFIT
+    private ArrayList<TrainingBlock> customWorkoutBlocks = new ArrayList<>();
+    private int currentBlockIndex = 0;
+    private int totalWorkoutSeconds = 0;
+    private int totalSecondsLeft = 0;
+    private int currentBlockSecondsLeft = 0;
+    private boolean isCustomWorkoutActive = false;
+    private boolean isCustomWorkoutLoaded = false;
+    private long customWorkoutStartTime = 0;
+    private LinearLayout customWorkoutContainer;
+    private TextView customTotalTimeText;
+    private LinearLayout customCurrentBlockCard;
+    private LinearLayout customUpcomingBlocksList;
+    private ArrayList<View> blockViews = new ArrayList<>();
+    
+    // Zabezpieczenie przycisku STOP CROSSFIT - przytrzymanie 5s
+    private boolean isStopCustomPressActive = false;
+    private long stopCustomPressStartTime = 0;
     
     // Zabezpieczenie przycisku rozłącz - przytrzymanie 5s
     private boolean isDisconnectPressActive = false;
@@ -532,9 +554,10 @@ public class MainActivity extends Activity {
         separatorText.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
         mainLayout.addView(separatorText);
         
-        // Przycisk wyboru typu timera
+        // Przycisk wyboru typu timera (UKRYTY - używamy tylko CROSSFIT)
         timerTypeButton = new Button(this);
         timerTypeButton.setText("🏆 Timer CrossFit ▼");
+        timerTypeButton.setVisibility(View.GONE); // Ukryty na stałe
         applyDefaultGradient(timerTypeButton);
         timerTypeButton.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -544,18 +567,20 @@ public class MainActivity extends Activity {
         });
         mainLayout.addView(timerTypeButton);
         
-        // Główny timer display
+        // Główny timer display (UKRYTY - używamy CROSSFIT)
         mainTimerDisplay = new TextView(this);
         updateMainTimerDisplay();
         mainTimerDisplay.setTextSize(28);
         mainTimerDisplay.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
         mainTimerDisplay.setPadding(20, 30, 20, 30);
+        mainTimerDisplay.setVisibility(View.GONE); // Ukryty na stałe
         mainLayout.addView(mainTimerDisplay);
         
-        // Layout dla ustawień timera
+        // Layout dla ustawień timera HIIT (UKRYTY - używamy CROSSFIT)
         timerSettingsLayout = new LinearLayout(this);
         timerSettingsLayout.setOrientation(LinearLayout.VERTICAL);
         timerSettingsLayout.setPadding(20, 10, 20, 10);
+        timerSettingsLayout.setVisibility(View.GONE); // Stary HIIT ukryty na stałe
         
         // Workout Time
         LinearLayout workoutLayout = new LinearLayout(this);
@@ -814,16 +839,18 @@ public class MainActivity extends Activity {
         
         mainLayout.addView(runningSettingsLayout);
         
-        // Timer treningu
+        // Timer treningu HIIT (UKRYTY - używamy CROSSFIT)
         workoutTimerText = new TextView(this);
         workoutTimerText.setText("Gotowy do treningu!");
         workoutTimerText.setTextSize(24);
         workoutTimerText.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        workoutTimerText.setVisibility(View.GONE); // Ukryty na stałe
         mainLayout.addView(workoutTimerText);
         
-        // Przycisk START/STOP połączony
+        // Przycisk START/STOP HIIT (UKRYTY - używamy CROSSFIT)
         startWorkoutButton = new Button(this);
         startWorkoutButton.setText("🏃‍♂️ START TRENINGU");
+        startWorkoutButton.setVisibility(View.GONE); // Ukryty na stałe
         applyDefaultGradient(startWorkoutButton);
         startWorkoutButton.setOnTouchListener(new View.OnTouchListener() {
             @Override
@@ -876,6 +903,51 @@ public class MainActivity extends Activity {
         });
         mainLayout.addView(showMapButton);
         refreshMapButtonVisibility();
+        
+        // Przycisk KONFIGURATOR TRENINGU CROSSFIT
+        configuratorButton = new Button(this);
+        configuratorButton.setText("⚙️ KONFIGURATOR TRENINGU");
+        configuratorButton.setTextSize(14);
+        applyDefaultGradient(configuratorButton);
+        LinearLayout.LayoutParams configuratorParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 120);
+        configuratorParams.setMargins(0, 20, 0, 0);
+        configuratorButton.setLayoutParams(configuratorParams);
+        configuratorButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openCustomWorkoutConfigurator();
+            }
+        });
+        mainLayout.addView(configuratorButton);
+        
+        // Przycisk START/STOP TRENING CROSSFIT
+        customStartStopButton = new Button(this);
+        customStartStopButton.setText("🏃 START TRENING CROSSFIT");
+        customStartStopButton.setTextSize(14);
+        applyDefaultGradient(customStartStopButton);
+        customStartStopButton.setVisibility(View.GONE); // Ukryty domyślnie
+        LinearLayout.LayoutParams startStopParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 120);
+        startStopParams.setMargins(0, 20, 0, 0);
+        customStartStopButton.setLayoutParams(startStopParams);
+        customStartStopButton.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        handleCustomStartStopPress();
+                        return true;
+                        
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        handleCustomStartStopRelease();
+                        return true;
+                }
+                return false;
+            }
+        });
+        mainLayout.addView(customStartStopButton);
         
         // Przycisk zamknij aplikację - ZAWSZE NA KOŃCU
         closeAppButton = new Button(this);
@@ -1150,6 +1222,29 @@ public class MainActivity extends Activity {
                 // Aktualizuj tekst przycisku
                 int secondsLeft = (int) Math.ceil(remainingTime / 1000.0);
                 hrSettingsButton.setText("⏱️ PRZYTRZYMAJ " + secondsLeft + "s");
+                handler.postDelayed(this, 100);
+            }
+        }
+    };
+    
+    private Runnable stopCustomCountdownRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!isStopCustomPressActive) {
+                return;
+            }
+            
+            long elapsedTime = System.currentTimeMillis() - stopCustomPressStartTime;
+            long remainingTime = 5000 - elapsedTime;
+            
+            if (remainingTime <= 0) {
+                // 5 sekund upłynęło - zatrzymaj trening
+                isStopCustomPressActive = false;
+                stopCustomWorkout();
+            } else {
+                // Aktualizuj tekst przycisku
+                int secondsLeft = (int) Math.ceil(remainingTime / 1000.0);
+                customStartStopButton.setText("⏱️ PRZYTRZYMAJ " + secondsLeft + "s");
                 handler.postDelayed(this, 100);
             }
         }
@@ -2602,6 +2697,9 @@ public class MainActivity extends Activity {
                 pendingRunningStart = false;
             }
         }
+        
+        // Załaduj custom workout jeśli zapisany
+        loadCustomWorkout();
     }
 
     @Override
@@ -3585,5 +3683,623 @@ public class MainActivity extends Activity {
             polarDir.mkdirs();
         }
         return polarDir;
+    }
+    
+    // ===== CUSTOM WORKOUT CROSSFIT =====
+    
+    /**
+     * Ładuje custom workout z SharedPreferences
+     */
+    private void loadCustomWorkout() {
+        SharedPreferences prefs = getSharedPreferences("PolarH10", MODE_PRIVATE);
+        boolean shouldLoad = prefs.getBoolean("custom_workout_loaded", false);
+        
+        if (!shouldLoad) {
+            hideCustomWorkoutUI();
+            return;
+        }
+        
+        String json = prefs.getString("custom_workout_json", "[]");
+        
+        try {
+            org.json.JSONArray array = new org.json.JSONArray(json);
+            customWorkoutBlocks.clear();
+            
+            for (int i = 0; i < array.length(); i++) {
+                TrainingBlock block = TrainingBlock.fromJSON(array.getJSONObject(i));
+                customWorkoutBlocks.add(block);
+            }
+            
+            if (customWorkoutBlocks.isEmpty()) {
+                hideCustomWorkoutUI();
+                return;
+            }
+            
+            // Oblicz całkowity czas (bez END blocks)
+            totalWorkoutSeconds = 0;
+            for (TrainingBlock block : customWorkoutBlocks) {
+                if (block.getType() != TrainingBlock.BlockType.END) {
+                    totalWorkoutSeconds += block.getDurationSeconds();
+                }
+            }
+            
+            isCustomWorkoutLoaded = true;
+            displayCustomWorkoutUI();
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Błąd ładowania custom workout: " + e.getMessage());
+            hideCustomWorkoutUI();
+        }
+    }
+    
+    /**
+     * Wyświetla UI dla custom workout
+     */
+    private void displayCustomWorkoutUI() {
+        if (!isCustomWorkoutLoaded || customWorkoutBlocks.isEmpty()) {
+            return;
+        }
+        
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                int min = totalWorkoutSeconds / 60;
+                int sec = totalWorkoutSeconds % 60;
+                Toast.makeText(MainActivity.this, 
+                    String.format("✓ Załadowano trening: %d:%02d | %d bloków", 
+                        min, sec, customWorkoutBlocks.size()), 
+                    Toast.LENGTH_SHORT).show();
+                
+                // Utwórz lub zaktualizuj UI
+                if (customWorkoutContainer == null) {
+                    createCustomWorkoutLayout();
+                } else {
+                    updateCustomWorkoutLayout();
+                }
+                
+                // Pokaż przycisk START/STOP
+                if (customStartStopButton != null) {
+                    customStartStopButton.setVisibility(View.VISIBLE);
+                    customStartStopButton.setText("🏃 START TRENING CROSSFIT");
+                }
+            }
+        });
+    }
+    
+    /**
+     * Tworzy layout dla custom workout
+     */
+    private void createCustomWorkoutLayout() {
+        int insertIndex = mainLayout.indexOfChild(configuratorButton);
+        
+        customWorkoutContainer = new LinearLayout(this);
+        customWorkoutContainer.setOrientation(LinearLayout.VERTICAL);
+        customWorkoutContainer.setPadding(0, 20, 0, 20);
+        customWorkoutContainer.setBackgroundColor(0xFF2a2a2a);
+        
+        TextView titleText = new TextView(this);
+        titleText.setText("⏱️ TIMER CROSSFIT");
+        titleText.setTextSize(20);
+        titleText.setTextColor(0xFFFFFFFF);
+        titleText.setGravity(Gravity.CENTER);
+        titleText.setPadding(0, 10, 0, 10);
+        customWorkoutContainer.addView(titleText);
+        
+        customTotalTimeText = new TextView(this);
+        customTotalTimeText.setTextSize(144);
+        customTotalTimeText.setTextColor(0xFF00FF00);
+        customTotalTimeText.setGravity(Gravity.CENTER);
+        customTotalTimeText.setPadding(0, 20, 0, 20);
+        customTotalTimeText.setBackgroundColor(0xFF1a1a1a);
+        int min = totalWorkoutSeconds / 60;
+        int sec = totalWorkoutSeconds % 60;
+        customTotalTimeText.setText(String.format("%d:%02d", min, sec));
+        customWorkoutContainer.addView(customTotalTimeText);
+        
+        View spacer1 = new View(this);
+        spacer1.setLayoutParams(new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 15));
+        customWorkoutContainer.addView(spacer1);
+        
+        TextView upcomingLabel = new TextView(this);
+        upcomingLabel.setText("▼ KOLEJKA:");
+        upcomingLabel.setTextSize(14);
+        upcomingLabel.setTextColor(0xFFCCCCCC);
+        upcomingLabel.setPadding(10, 0, 0, 5);
+        customWorkoutContainer.addView(upcomingLabel);
+        
+        customUpcomingBlocksList = new LinearLayout(this);
+        customUpcomingBlocksList.setOrientation(LinearLayout.VERTICAL);
+        customUpcomingBlocksList.setPadding(10, 10, 10, 10);
+        customUpcomingBlocksList.setBackgroundColor(0xFF1a1a1a);
+        customWorkoutContainer.addView(customUpcomingBlocksList);
+        
+        updateCustomWorkoutLayout();
+        
+        if (insertIndex >= 0) {
+            mainLayout.addView(customWorkoutContainer, insertIndex);
+        } else {
+            mainLayout.addView(customWorkoutContainer);
+        }
+    }
+    
+    /**
+     * Aktualizuje listę bloków w custom workout
+     */
+    private void updateCustomWorkoutLayout() {
+        if (customUpcomingBlocksList == null) {
+            return;
+        }
+        
+        // Aktualizuj całkowity czas w timerze
+        if (customTotalTimeText != null) {
+            int min = totalWorkoutSeconds / 60;
+            int sec = totalWorkoutSeconds % 60;
+            customTotalTimeText.setText(String.format("%d:%02d", min, sec));
+        }
+        
+        customUpcomingBlocksList.removeAllViews();
+        blockViews.clear();
+        
+        for (int i = 0; i < customWorkoutBlocks.size(); i++) {
+            TrainingBlock block = customWorkoutBlocks.get(i);
+            
+            LinearLayout blockItem = new LinearLayout(this);
+            blockItem.setOrientation(LinearLayout.HORIZONTAL);
+            blockItem.setPadding(10, 8, 10, 8);
+            blockItem.setGravity(Gravity.CENTER_VERTICAL);
+            
+            TextView numText = new TextView(this);
+            numText.setText((i + 1) + ".");
+            numText.setTextSize(14);
+            numText.setTextColor(0xFFCCCCCC);
+            numText.setPadding(0, 0, 10, 0);
+            blockItem.addView(numText);
+            
+            TextView blockText = new TextView(this);
+            blockText.setText(block.getEmoji() + " " + block.getTypeName() + " " + block.getFormattedDuration());
+            blockText.setTextSize(16);
+            blockText.setTextColor(0xFFFFFFFF);
+            blockText.setLayoutParams(new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+            blockItem.addView(blockText);
+            
+            customUpcomingBlocksList.addView(blockItem);
+            blockViews.add(blockItem);
+            
+            if (i < customWorkoutBlocks.size() - 1) {
+                View separator = new View(this);
+                separator.setLayoutParams(new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, 1));
+                separator.setBackgroundColor(0xFF333333);
+                customUpcomingBlocksList.addView(separator);
+            }
+        }
+    }
+    
+    /**
+     * Ukrywa UI custom workout
+     */
+    private void hideCustomWorkoutUI() {
+        if (customWorkoutContainer != null && customWorkoutContainer.getParent() != null) {
+            mainLayout.removeView(customWorkoutContainer);
+            customWorkoutContainer = null;
+        }
+        
+        // Ukryj przycisk START/STOP
+        if (customStartStopButton != null) {
+            customStartStopButton.setVisibility(View.GONE);
+        }
+    }
+    
+    /**
+     * Obsługa wciśnięcia przycisku START/STOP
+     */
+    private void handleCustomStartStopPress() {
+        if (!isCustomWorkoutActive) {
+            // START - od razu uruchamia
+            startCustomWorkout();
+        } else {
+            // STOP - przytrzymanie 5s
+            isStopCustomPressActive = true;
+            stopCustomPressStartTime = System.currentTimeMillis();
+            handler.post(stopCustomCountdownRunnable);
+        }
+    }
+    
+    /**
+     * Obsługa puszczenia przycisku START/STOP
+     */
+    private void handleCustomStartStopRelease() {
+        if (isStopCustomPressActive) {
+            // Anuluj przytrzymanie
+            isStopCustomPressActive = false;
+            handler.removeCallbacks(stopCustomCountdownRunnable);
+            if (customStartStopButton != null && isCustomWorkoutActive) {
+                customStartStopButton.setText("⏹️ ZATRZYMAJ TRENING");
+            }
+        }
+    }
+    
+    /**
+     * Rozpoczyna custom workout
+     */
+    private void startCustomWorkout() {
+        if (customWorkoutBlocks.isEmpty()) {
+            Toast.makeText(this, "Brak klocków!", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        
+        if (isCustomWorkoutActive) {
+            Toast.makeText(this, "Trening już aktywny!", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        
+        Log.d(TAG, "🏃 Rozpoczynam countdown Custom Workout (30 sekund)");
+        
+        // WAŻNE: Anuluj wszystkie pending callbacks żeby uniknąć wielokrotnych timerów
+        handler.removeCallbacksAndMessages(null);
+        
+        // Oznacz jako aktywny JUŻ TERAZ (przed countdown)
+        isCustomWorkoutActive = true;
+        customWorkoutStartTime = System.currentTimeMillis();
+        
+        // Zmień przycisk na STOP
+        if (customStartStopButton != null) {
+            customStartStopButton.setText("⏹️ ZATRZYMAJ TRENING");
+        }
+        
+        // Zablokuj konfigurator podczas treningu
+        if (configuratorButton != null) {
+            configuratorButton.setEnabled(false);
+        }
+        
+        // Reset stanu
+        currentBlockIndex = 0;
+        totalSecondsLeft = totalWorkoutSeconds;
+        
+        // Countdown 30 sekund
+        customCountdownTick(30);
+    }
+    
+    /**
+     * Zatrzymuje custom workout
+     */
+    private void stopCustomWorkout() {
+        Log.d(TAG, "🛑 Zatrzymuję Custom Workout");
+        isCustomWorkoutActive = false;
+        
+        // Anuluj wszystkie pending callbacks
+        handler.removeCallbacksAndMessages(null);
+        
+        // Wyłącz WakeLock
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+            Log.d(TAG, "🔋 WakeLock wyłączony");
+        }
+        
+        // Zmień przycisk na START
+        if (customStartStopButton != null) {
+            customStartStopButton.setText("🏃 START TRENING CROSSFIT");
+        }
+        
+        // Odblokuj konfigurator
+        if (configuratorButton != null) {
+            configuratorButton.setEnabled(true);
+        }
+        
+        // Reset UI
+        resetCustomWorkoutUI();
+        
+        Toast.makeText(this, "🛑 Trening zatrzymany", Toast.LENGTH_SHORT).show();
+    }
+    
+    /**
+     * Countdown przed startem
+     */
+    private void customCountdownTick(final int secondsLeft) {
+        if (!isCustomWorkoutActive) {
+            return; // Anulowano trening
+        }
+        
+        if (secondsLeft > 0) {
+            customTotalTimeText.setTextSize(100); // Mniejsza czcionka dla countdown
+            customTotalTimeText.setText("START za: " + secondsLeft);
+            customTotalTimeText.setTextColor(0xFFFF9800); // Pomarańczowy
+            
+            // TTS: 30s na starcie, potem 10-1
+            if (secondsLeft == 30) {
+                speak("30 sekund");
+            } else if (secondsLeft <= 10) {
+                speak(String.valueOf(secondsLeft));
+            }
+            
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    customCountdownTick(secondsLeft - 1);
+                }
+            }, 1000);
+        } else {
+            // START!
+            customTotalTimeText.setTextSize(144); // Przywróć normalny rozmiar
+            customTotalTimeText.setText("🔥 GO! 🔥");
+            customTotalTimeText.setTextColor(0xFFFF0000); // Czerwony
+            // Bez TTS - zaraz ogłosimy pierwszy blok
+            
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    startCustomWorkoutExecution();
+                }
+            }, 1000);
+        }
+    }
+    
+    /**
+     * Rozpoczyna właściwe wykonywanie treningu
+     */
+    private void startCustomWorkoutExecution() {
+        Log.d(TAG, "🔥 CUSTOM WORKOUT ROZPOCZĘTY");
+        isCustomWorkoutActive = true;
+        
+        // Włącz WakeLock
+        if (wakeLock != null && !wakeLock.isHeld()) {
+            wakeLock.acquire();
+            Log.d(TAG, "🔋 WakeLock włączony");
+        }
+        
+        // Wycentruj timer podczas treningu
+        if (customTotalTimeText != null) {
+            customTotalTimeText.setGravity(Gravity.CENTER);
+        }
+        
+        // Załaduj pierwszy blok
+        loadCurrentBlock();
+        
+        // Rozpocznij ticker
+        customWorkoutTick();
+    }
+    
+    /**
+     * Ładuje aktualny blok
+     */
+    private void loadCurrentBlock() {
+        if (currentBlockIndex >= customWorkoutBlocks.size()) {
+            finishCustomWorkout();
+            return;
+        }
+        
+        TrainingBlock block = customWorkoutBlocks.get(currentBlockIndex);
+        currentBlockSecondsLeft = block.getDurationSeconds();
+        
+        // Highlight aktualnego bloku
+        highlightCurrentBlock();
+        
+        // TTS - ogłoś blok
+        announceBlock(block);
+        
+        Log.d(TAG, "📍 Blok " + (currentBlockIndex + 1) + "/" + customWorkoutBlocks.size() + 
+                   ": " + block.getTypeName() + " " + block.getFormattedDuration());
+    }
+    
+    /**
+     * Podświetla aktualny blok
+     */
+    private void highlightCurrentBlock() {
+        for (int i = 0; i < blockViews.size(); i++) {
+            View blockView = blockViews.get(i);
+            if (i == currentBlockIndex) {
+                // Aktualny - zielone tło
+                blockView.setBackgroundColor(0xFF2a4a2a);
+                blockView.setAlpha(1.0f);
+            } else if (i < currentBlockIndex) {
+                // Ukończony - szare, przezroczyste
+                blockView.setBackgroundColor(0xFF1a1a1a);
+                blockView.setAlpha(0.4f);
+            } else {
+                // Następny - normalne
+                blockView.setBackgroundColor(0xFF1a1a1a);
+                blockView.setAlpha(1.0f);
+            }
+        }
+    }
+    
+    /**
+     * Ogłasza blok przez TTS
+     */
+    private void announceBlock(TrainingBlock block) {
+        String announcement = "";
+        
+        switch (block.getType()) {
+            case WORKOUT:
+                announcement = "Start treningu";
+                break;
+            case REST:
+                announcement = "Odpoczynek";
+                break;
+            case BREAK:
+                int minutes = block.getDurationSeconds() / 60;
+                announcement = "Przerwa treningowa " + minutes + (minutes == 1 ? " minuta" : " minut");
+                break;
+            case END:
+                announcement = "Koniec treningu";
+                break;
+        }
+        
+        speak(announcement);
+    }
+    
+    /**
+     * Ticker - odlicza co sekundę
+     */
+    private void customWorkoutTick() {
+        if (!isCustomWorkoutActive) {
+            return;
+        }
+        
+        if (totalSecondsLeft <= 0) {
+            finishCustomWorkout();
+            return;
+        }
+        
+        if (currentBlockSecondsLeft <= 0) {
+            completeCurrentBlock();
+            return;
+        }
+        
+        // Aktualizuj wyświetlacze
+        int totalMin = totalSecondsLeft / 60;
+        int totalSec = totalSecondsLeft % 60;
+        customTotalTimeText.setText(String.format("%d:%02d", totalMin, totalSec));
+        customTotalTimeText.setTextColor(0xFF00FF00); // Zielony podczas treningu
+        
+        // TTS ostrzeżenia
+        TrainingBlock currentBlock = customWorkoutBlocks.get(currentBlockIndex);
+        
+        if (currentBlock.getType() == TrainingBlock.BlockType.BREAK) {
+            // BREAK: ostrzeżenie 30s, potem 10-1
+            if (currentBlockSecondsLeft == 30) {
+                speak("30 sekund do końca");
+            } else if (currentBlockSecondsLeft <= 10 && currentBlockSecondsLeft >= 1) {
+                speak(String.valueOf(currentBlockSecondsLeft));
+            }
+        } else if (currentBlock.getType() != TrainingBlock.BlockType.END) {
+            // WORKOUT i REST: tylko 10-1
+            if (currentBlockSecondsLeft <= 10 && currentBlockSecondsLeft >= 1) {
+                speak(String.valueOf(currentBlockSecondsLeft));
+            }
+        }
+        
+        // Odliczaj
+        totalSecondsLeft--;
+        currentBlockSecondsLeft--;
+        
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                customWorkoutTick();
+            }
+        }, 1000);
+    }
+    
+    /**
+     * Kończy aktualny blok i przechodzi do następnego
+     */
+    private void completeCurrentBlock() {
+        if (currentBlockIndex >= customWorkoutBlocks.size()) {
+            finishCustomWorkout();
+            return;
+        }
+        
+        TrainingBlock completedBlock = customWorkoutBlocks.get(currentBlockIndex);
+        
+        // Animacja ukończenia
+        if (currentBlockIndex < blockViews.size()) {
+            View blockView = blockViews.get(currentBlockIndex);
+            blockView.setBackgroundColor(0xFF808080); // Szary
+            blockView.setAlpha(0.3f);
+        }
+        
+        // Obsługa bloku END
+        if (completedBlock.getType() == TrainingBlock.BlockType.END) {
+            speak("Koniec treningu");
+            
+            // Pauza 2 sekundy przed kolejnym treningiem
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    moveToNextBlock();
+                }
+            }, 2000);
+        } else {
+            moveToNextBlock();
+        }
+    }
+    
+    /**
+     * Przechodzi do następnego bloku
+     */
+    private void moveToNextBlock() {
+        currentBlockIndex++;
+        
+        if (currentBlockIndex >= customWorkoutBlocks.size()) {
+            finishCustomWorkout();
+            return;
+        }
+        
+        loadCurrentBlock();
+        
+        // WAŻNE: Kontynuuj ticker dla nowego bloku!
+        customWorkoutTick();
+    }
+    
+    /**
+     * Kończy cały trening
+     */
+    private void finishCustomWorkout() {
+        Log.d(TAG, "✅ CUSTOM WORKOUT ZAKOŃCZONY!");
+        isCustomWorkoutActive = false;
+        
+        // Anuluj wszystkie pending callbacks
+        handler.removeCallbacksAndMessages(null);
+        
+        // Wyłącz WakeLock
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+            Log.d(TAG, "🔋 WakeLock wyłączony");
+        }
+        
+        customTotalTimeText.setText("🎉 TRENING UKOŃCZONY! 🎉");
+        customTotalTimeText.setTextColor(0xFFFFD700); // Złoty
+        
+        speak("Trening ukończony! Świetna robota!");
+        
+        // Zmień przycisk na START
+        if (customStartStopButton != null) {
+            customStartStopButton.setText("🏃 START TRENING CROSSFIT");
+        }
+        
+        // Odblokuj konfigurator
+        if (configuratorButton != null) {
+            configuratorButton.setEnabled(true);
+        }
+        
+        // Reset po 3 sekundach
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                resetCustomWorkoutUI();
+            }
+        }, 3000);
+    }
+    
+    /**
+     * Resetuje UI po treningu
+     */
+    private void resetCustomWorkoutUI() {
+        currentBlockIndex = 0;
+        totalSecondsLeft = totalWorkoutSeconds;
+        
+        int min = totalWorkoutSeconds / 60;
+        int sec = totalWorkoutSeconds % 60;
+        customTotalTimeText.setText(String.format("%d:%02d", min, sec));
+        customTotalTimeText.setTextColor(0xFF00FF00);
+        
+        // Reset podświetleń
+        for (View blockView : blockViews) {
+            blockView.setBackgroundColor(0xFF1a1a1a);
+            blockView.setAlpha(1.0f);
+        }
+        
+        Log.d(TAG, "🔄 Custom Workout UI zresetowany");
+    }
+    
+    /**
+     * Otwiera konfigurator Custom Workout
+     */
+    private void openCustomWorkoutConfigurator() {
+        Intent intent = new Intent(this, CustomWorkoutActivity.class);
+        startActivity(intent);
     }
 }
