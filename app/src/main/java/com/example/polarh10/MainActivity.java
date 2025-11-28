@@ -365,8 +365,8 @@ public class MainActivity extends Activity {
         requestBluetoothPermissions();
         
         // Inicjalizacja TTS i Audio
-        initializeTTS();
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+        initializeTTS();
         
         // Zapisz pierwotną głośność przy uruchomieniu aplikacji
         originalVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
@@ -391,7 +391,15 @@ public class MainActivity extends Activity {
         mainLayout.setPadding(30, 30, 30, 30);
 
         loadHrZonePreferences();
-        loadTtsVolumePreference();
+        loadTtsVolumePreference(); // Załaduj głośność z SharedPreferences
+        
+        // Ustaw głośność telefonu na zapamiętaną wartość
+        if (audioManager != null) {
+            int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            int targetVolume = (int) ((ttsVolumePercent / 100.0f) * maxVolume);
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0);
+            Log.d(TAG, "🔊 STARTUP: Ustawiono głośność telefonu na " + ttsVolumePercent + "% (" + targetVolume + "/" + maxVolume + ")");
+        }
         
         // Layout poziomy dla czasu i przycisku głośności
         LinearLayout topBarLayout = new LinearLayout(this);
@@ -2238,6 +2246,15 @@ public class MainActivity extends Activity {
                 ttsVolumePercent = seekBar.getProgress() * 10;
                 saveTtsVolumePreference();
                 updateVolumeButtonIcon();
+                
+                // Ustaw głośność telefonu na wybrany poziom
+                if (audioManager != null) {
+                    int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                    int targetVolume = (int) ((ttsVolumePercent / 100.0f) * maxVolume);
+                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0);
+                    Log.d(TAG, "🔊 Ustawiono głośność telefonu: " + ttsVolumePercent + "% (" + targetVolume + "/" + maxVolume + ")");
+                }
+                
                 Toast.makeText(MainActivity.this, "✅ Głośność TTS: " + ttsVolumePercent + "%", Toast.LENGTH_SHORT).show();
             }
         });
@@ -2249,6 +2266,9 @@ public class MainActivity extends Activity {
     // ===== TTS METHODS =====
     
     private void initializeTTS() {
+        // Uwaga: Głośność telefonu ustawiana jest w onCreate() po inicjalizacji audioManager
+        // Tu tylko inicjalizujemy TTS engine
+        
         tts = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
             @Override
             public void onInit(int status) {
