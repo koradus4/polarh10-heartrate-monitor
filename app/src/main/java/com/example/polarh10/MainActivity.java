@@ -155,9 +155,13 @@ public class MainActivity extends Activity {
     private long customWorkoutStartTime = 0;
     private LinearLayout customWorkoutContainer;
     private TextView customTotalTimeText;
+    private TextView customBlockTimeText;
+    private TextView customBlockTypeText;
     private LinearLayout customCurrentBlockCard;
     private LinearLayout customUpcomingBlocksList;
     private ArrayList<View> blockViews = new ArrayList<>();
+    private int lastScrollCheckSecond = -1;
+    private int targetScrollY = -1;
     
     // Zabezpieczenie przycisku STOP CROSSFIT - przytrzymanie 5s
     private boolean isStopCustomPressActive = false;
@@ -321,7 +325,10 @@ public class MainActivity extends Activity {
             startWorkoutButton,
             runningWorkoutButton,
             showMapButton,
-            closeAppButton
+            closeAppButton,
+            configuratorButton,
+            customStartStopButton,
+            volumeButton
         };
     }
 
@@ -388,7 +395,7 @@ public class MainActivity extends Activity {
 
         mainLayout = new LinearLayout(this);
         mainLayout.setOrientation(LinearLayout.VERTICAL);
-        mainLayout.setPadding(30, 30, 30, 30);
+        mainLayout.setPadding(30, 30, 30, 200); // Zwiększony padding na dole dla paska nawigacyjnego
 
         loadHrZonePreferences();
         loadTtsVolumePreference(); // Załaduj głośność z SharedPreferences
@@ -1308,6 +1315,9 @@ public class MainActivity extends Activity {
                 
                 // Zatrzymaj auto-reconnect przy udanym połączeniu
                 stopAutoReconnect();
+                
+                // Aktywuj monitorowanie stref HR zaraz po połączeniu
+                setZoneMonitoringActive(true);
                 
                 runOnUiThread(new Runnable() {
                     @Override
@@ -2569,7 +2579,20 @@ public class MainActivity extends Activity {
         }
         int percentInt = Math.round(percent);
         String suffix = hrMaxValue > 0 ? " (" + percentInt + "% HRMAX)" : "";
-        heartRateText.setText("❤️ Tętno: " + heartRate + " BPM" + suffix);
+        
+        // Format with larger heart rate number
+        android.text.SpannableStringBuilder builder = new android.text.SpannableStringBuilder();
+        builder.append("❤️ Tętno: ");
+        int start = builder.length();
+        builder.append(String.valueOf(heartRate));
+        int end = builder.length();
+        builder.append(" BPM" + suffix);
+        
+        // Make only the heart rate number 2.5x larger and bright green
+        builder.setSpan(new android.text.style.RelativeSizeSpan(2.5f), start, end, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        builder.setSpan(new android.text.style.ForegroundColorSpan(0xFF00FF00), start, end, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        
+        heartRateText.setText(builder);
     }
 
     private void updateHeartRateZoneUI() {
@@ -3797,23 +3820,34 @@ public class MainActivity extends Activity {
         customWorkoutContainer.setPadding(0, 20, 0, 20);
         customWorkoutContainer.setBackgroundColor(0xFF2a2a2a);
         
-        TextView titleText = new TextView(this);
-        titleText.setText("⏱️ TIMER CROSSFIT");
-        titleText.setTextSize(20);
-        titleText.setTextColor(0xFFFFFFFF);
-        titleText.setGravity(Gravity.CENTER);
-        titleText.setPadding(0, 10, 0, 10);
-        customWorkoutContainer.addView(titleText);
+        // Nazwa typu bloku (TRENING/REST/PRZERWA)
+        customBlockTypeText = new TextView(this);
+        customBlockTypeText.setText("");
+        customBlockTypeText.setTextSize(40);
+        customBlockTypeText.setTextColor(0xFF00FF00);
+        customBlockTypeText.setGravity(Gravity.CENTER);
+        customBlockTypeText.setPadding(0, 10, 0, 10);
+        customWorkoutContainer.addView(customBlockTypeText);
         
+        // Duży timer - czas bloku (144sp)
+        customBlockTimeText = new TextView(this);
+        customBlockTimeText.setTextSize(144);
+        customBlockTimeText.setTextColor(0xFF00FF00);
+        customBlockTimeText.setGravity(Gravity.CENTER);
+        customBlockTimeText.setPadding(0, 20, 0, 20);
+        customBlockTimeText.setBackgroundColor(0xFF1a1a1a);
+        customBlockTimeText.setText("0:00");
+        customWorkoutContainer.addView(customBlockTimeText);
+        
+        // Mały timer - całkowity czas (40sp)
         customTotalTimeText = new TextView(this);
-        customTotalTimeText.setTextSize(144);
+        customTotalTimeText.setTextSize(40);
         customTotalTimeText.setTextColor(0xFF00FF00);
         customTotalTimeText.setGravity(Gravity.CENTER);
-        customTotalTimeText.setPadding(0, 20, 0, 20);
-        customTotalTimeText.setBackgroundColor(0xFF1a1a1a);
+        customTotalTimeText.setPadding(0, 5, 0, 5);
         int min = totalWorkoutSeconds / 60;
         int sec = totalWorkoutSeconds % 60;
-        customTotalTimeText.setText(String.format("%d:%02d", min, sec));
+        customTotalTimeText.setText(String.format("Całość: %d:%02d", min, sec));
         customWorkoutContainer.addView(customTotalTimeText);
         
         View spacer1 = new View(this);
@@ -3988,6 +4022,7 @@ public class MainActivity extends Activity {
     private void stopCustomWorkout() {
         Log.d(TAG, "🛑 Zatrzymuję Custom Workout");
         isCustomWorkoutActive = false;
+        setZoneMonitoringActive(false);
         
         // Anuluj wszystkie pending callbacks
         handler.removeCallbacksAndMessages(null);
@@ -4023,9 +4058,10 @@ public class MainActivity extends Activity {
         }
         
         if (secondsLeft > 0) {
-            customTotalTimeText.setTextSize(100); // Mniejsza czcionka dla countdown
-            customTotalTimeText.setText("START za: " + secondsLeft);
-            customTotalTimeText.setTextColor(0xFFFF9800); // Pomarańczowy
+            customBlockTypeText.setText("🏁 PRZYGOTUJ SIĘ");
+            customBlockTimeText.setTextSize(100); // Mniejsza czcionka dla countdown
+            customBlockTimeText.setText("START za: " + secondsLeft);
+            customBlockTimeText.setTextColor(0xFFFF9800); // Pomarańczowy
             
             // TTS: 30s na starcie, potem 10-1
             if (secondsLeft == 30) {
@@ -4042,9 +4078,10 @@ public class MainActivity extends Activity {
             }, 1000);
         } else {
             // START!
-            customTotalTimeText.setTextSize(144); // Przywróć normalny rozmiar
-            customTotalTimeText.setText("🔥 GO! 🔥");
-            customTotalTimeText.setTextColor(0xFFFF0000); // Czerwony
+            customBlockTypeText.setText("🔥 START! 🔥");
+            customBlockTimeText.setTextSize(144); // Przywróć normalny rozmiar
+            customBlockTimeText.setText("🔥 GO! 🔥");
+            customBlockTimeText.setTextColor(0xFFFF0000); // Czerwony
             // Bez TTS - zaraz ogłosimy pierwszy blok
             
             handler.postDelayed(new Runnable() {
@@ -4069,16 +4106,59 @@ public class MainActivity extends Activity {
             Log.d(TAG, "🔋 WakeLock włączony");
         }
         
-        // Wycentruj timer podczas treningu
+        // Włącz monitoring stref tętna
+        setZoneMonitoringActive(true);
+        
+        // Wycentruj timery podczas treningu
         if (customTotalTimeText != null) {
             customTotalTimeText.setGravity(Gravity.CENTER);
         }
+        if (customBlockTimeText != null) {
+            customBlockTimeText.setGravity(Gravity.CENTER);
+        }
+        
+        // Przewiń do kontenera z timerem
+        scrollToWorkoutTimer();
         
         // Załaduj pierwszy blok
         loadCurrentBlock();
         
         // Rozpocznij ticker
         customWorkoutTick();
+    }
+    
+    /**
+     * Przewija ekran do kontenera z timerem treningu
+     */
+    private void scrollToWorkoutTimer() {
+        if (scrollView != null && customWorkoutContainer != null) {
+            scrollView.post(() -> {
+                int[] location = new int[2];
+                customWorkoutContainer.getLocationOnScreen(location);
+                int containerY = location[1];
+                
+                int[] scrollLocation = new int[2];
+                scrollView.getLocationOnScreen(scrollLocation);
+                int scrollY = scrollLocation[1];
+                
+                // Przewiń bardziej w dół, żeby pełny timer "Całość:" był widoczny
+                targetScrollY = Math.max(0, containerY - scrollY + 300);
+                scrollView.smoothScrollTo(0, targetScrollY);
+            });
+        }
+    }
+    
+    /**
+     * Sprawdza co 10s czy użytkownik nie przewinął ekranu i wraca do timera
+     */
+    private void checkAndScrollToTimer() {
+        if (scrollView != null && targetScrollY >= 0) {
+            int currentScrollY = scrollView.getScrollY();
+            // Jeśli użytkownik przewinął więcej niż 100px od celu, wróć do timera
+            if (Math.abs(currentScrollY - targetScrollY) > 100) {
+                scrollView.smoothScrollTo(0, targetScrollY);
+            }
+        }
     }
     
     /**
@@ -4169,18 +4249,40 @@ public class MainActivity extends Activity {
         }
         
         // Aktualizuj wyświetlacze
+        // Mały timer - czas całości
         int totalMin = totalSecondsLeft / 60;
         int totalSec = totalSecondsLeft % 60;
-        customTotalTimeText.setText(String.format("%d:%02d", totalMin, totalSec));
-        customTotalTimeText.setTextColor(0xFF00FF00); // Zielony podczas treningu
+        customTotalTimeText.setText(String.format("Całość: %d:%02d", totalMin, totalSec));
+        
+        // Duży timer - czas aktualnego bloku
+        int blockMin = currentBlockSecondsLeft / 60;
+        int blockSec = currentBlockSecondsLeft % 60;
+        customBlockTimeText.setText(String.format("%d:%02d", blockMin, blockSec));
+        customBlockTimeText.setTextColor(0xFF00FF00); // Zielony podczas treningu
+        
+        // Typ aktualnego bloku
+        TrainingBlock currentBlock = customWorkoutBlocks.get(currentBlockIndex);
+        switch (currentBlock.getType()) {
+            case WORKOUT:
+                customBlockTypeText.setText("💪 TRENING");
+                break;
+            case REST:
+                customBlockTypeText.setText("😮‍💨 REST");
+                break;
+            case BREAK:
+                customBlockTypeText.setText("☕ PRZERWA");
+                break;
+            case END:
+                customBlockTypeText.setText("🏁 KONIEC");
+                break;
+        }
         
         // TTS ostrzeżenia
-        TrainingBlock currentBlock = customWorkoutBlocks.get(currentBlockIndex);
         
         if (currentBlock.getType() == TrainingBlock.BlockType.BREAK) {
             // BREAK: ostrzeżenie 30s, potem 10-1
             if (currentBlockSecondsLeft == 30) {
-                speak("30 sekund do końca");
+                speak("30 sekund do końca przerwy");
             } else if (currentBlockSecondsLeft <= 10 && currentBlockSecondsLeft >= 1) {
                 speak(String.valueOf(currentBlockSecondsLeft));
             }
@@ -4189,6 +4291,13 @@ public class MainActivity extends Activity {
             if (currentBlockSecondsLeft <= 10 && currentBlockSecondsLeft >= 1) {
                 speak(String.valueOf(currentBlockSecondsLeft));
             }
+        }
+        
+        // Co 10 sekund sprawdź czy użytkownik nie przewinął
+        int currentSecond = totalSecondsLeft / 10;
+        if (currentSecond != lastScrollCheckSecond) {
+            lastScrollCheckSecond = currentSecond;
+            checkAndScrollToTimer();
         }
         
         // Odliczaj
@@ -4270,8 +4379,9 @@ public class MainActivity extends Activity {
             Log.d(TAG, "🔋 WakeLock wyłączony");
         }
         
-        customTotalTimeText.setText("🎉 TRENING UKOŃCZONY! 🎉");
-        customTotalTimeText.setTextColor(0xFFFFD700); // Złoty
+        customBlockTimeText.setText("🎉 UKOŃCZONO! 🎉");
+        customBlockTimeText.setTextColor(0xFFFFD700); // Złoty
+        customTotalTimeText.setText("Całość: 0:00");
         
         speak("Trening ukończony! Świetna robota!");
         
@@ -4303,8 +4413,9 @@ public class MainActivity extends Activity {
         
         int min = totalWorkoutSeconds / 60;
         int sec = totalWorkoutSeconds % 60;
-        customTotalTimeText.setText(String.format("%d:%02d", min, sec));
-        customTotalTimeText.setTextColor(0xFF00FF00);
+        customTotalTimeText.setText(String.format("Całość: %d:%02d", min, sec));
+        customBlockTimeText.setText("--:--");
+        customBlockTimeText.setTextColor(0xFF00FF00);
         
         // Reset podświetleń
         for (View blockView : blockViews) {
