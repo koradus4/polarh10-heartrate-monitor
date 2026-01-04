@@ -1,0 +1,10 @@
+Co nowego w tej wersji:
+
+• System wyboru użytkownika - każdy ma swoją opaskę Polar H10
+• Precyzyjny timer - dokładność milisekundowa, bez opóźnień
+• Zapamiętanie ostatniego użytkownika - szybki start
+• Możliwość zmiany profilu w trakcie sesji
+• Poprawiona synchronizacja czasu z Custom Workout
+• Spójny interfejs - wszystkie przyciski reagują na strefy tętna
+
+Teraz dwóch użytkowników może trenować w tej samej sali bez konfliktów!

@@ -59,8 +59,9 @@ import android.widget.SeekBar;
 public class MainActivity extends Activity {
     
     private static final String TAG = "PolarH10";
-    // TWOJA OPASKA POLAR H10
-    private static final String POLAR_H10_MAC = "24:AC:AC:09:A6:4D";
+    // Dynamiczny MAC - ustawiany z UserSelectionActivity
+    private String POLAR_H10_MAC = "24:AC:AC:07:CA:8D"; // Domyślny
+    private String currentUserName = "KRYSPIN"; // Domyślny
     
     // Heart Rate Service UUID (standardowy)
     private static final String HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb";
@@ -92,7 +93,7 @@ public class MainActivity extends Activity {
     private TextView roundsText;
     private Button roundsMinusButton;
     private Button roundsPlusButton;
-    private Button startWorkoutButton;
+    // private Button startWorkoutButton; // USUNIĘTE - STARY HIIT TIMER
     private Button stopWorkoutButton;
     private Button runningWorkoutButton;
     private Button closeAppButton;
@@ -100,6 +101,10 @@ public class MainActivity extends Activity {
     private Button volumeButton;
     private Button configuratorButton;
     private Button customStartStopButton;
+    private Button changeUserButton;
+    private Button musicPrevButton;
+    private Button musicPlayPauseButton;
+    private Button musicNextButton;
     private LinearLayout mainLayout;
     private ScrollView scrollView;
     
@@ -190,9 +195,9 @@ public class MainActivity extends Activity {
     // TTS i Audio
     private TextToSpeech tts;
     private AudioManager audioManager;
-    private int originalVolume = -1; // Zapis pierwotnej głośności
     private boolean isTtsReady = false;
     private int ttsVolumePercent = 80; // Głośność TTS w procentach (0-100)
+    // DUCK SYSTEM REMOVED - przyciski muzyki bez auto-duck
     
     // WakeLock - utrzymuje CPU włączony podczas treningu
     private PowerManager.WakeLock wakeLock;
@@ -322,13 +327,16 @@ public class MainActivity extends Activity {
             connectButton,
             hrSettingsButton,
             timerTypeButton,
-            startWorkoutButton,
             runningWorkoutButton,
             showMapButton,
             closeAppButton,
             configuratorButton,
             customStartStopButton,
-            volumeButton
+            volumeButton,
+            changeUserButton,
+            musicPrevButton,
+            musicPlayPauseButton,
+            musicNextButton
         };
     }
 
@@ -368,16 +376,20 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         
+        // Pobierz dane użytkownika z Intent
+        Intent intent = getIntent();
+        if (intent.hasExtra("USER_MAC")) {
+            POLAR_H10_MAC = intent.getStringExtra("USER_MAC");
+            currentUserName = intent.getStringExtra("USER_NAME");
+            Log.d(TAG, "👤 Wybrany użytkownik: " + currentUserName + " (" + POLAR_H10_MAC + ")");
+        }
+        
         // Prośba o uprawnienia Bluetooth
         requestBluetoothPermissions();
         
         // Inicjalizacja TTS i Audio
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
         initializeTTS();
-        
-        // Zapisz pierwotną głośność przy uruchomieniu aplikacji
-        originalVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
-        Log.d(TAG, "📱 URUCHOMIENIE: Zapisano pierwotną głośność: " + originalVolume);
         
         // Inicjalizacja WakeLock
         PowerManager powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
@@ -448,7 +460,7 @@ public class MainActivity extends Activity {
         
         // Tytuł
         TextView titleText = new TextView(this);
-        titleText.setText("🎯 POLAR H10 DIRECT");
+        titleText.setText("🎯 POLAR H10 - " + currentUserName);
         titleText.setTextSize(24);
         mainLayout.addView(titleText);
         
@@ -862,39 +874,12 @@ public class MainActivity extends Activity {
         workoutTimerText.setVisibility(View.GONE); // Ukryty na stałe
         mainLayout.addView(workoutTimerText);
         
-        // Przycisk START/STOP HIIT (UKRYTY - używamy CROSSFIT)
-        startWorkoutButton = new Button(this);
-        startWorkoutButton.setText("🏃‍♂️ START TRENINGU");
-        startWorkoutButton.setVisibility(View.GONE); // Ukryty na stałe
-        applyDefaultGradient(startWorkoutButton);
-        startWorkoutButton.setOnTouchListener(new View.OnTouchListener() {
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                switch (event.getAction()) {
-                    case MotionEvent.ACTION_DOWN:
-                        if (!isWorkoutActive && !isCountdownActive) {
-                            // Trening nieaktywny - start natychmiast
-                            startWorkoutCountdown();
-                        } else {
-                            // Trening aktywny - przytrzymaj 5s do zatrzymania
-                            startStopTimer();
-                        }
-                        return true;
-                    case MotionEvent.ACTION_UP:
-                    case MotionEvent.ACTION_CANCEL:
-                        if (isWorkoutActive || isCountdownActive) {
-                            cancelStopTimer();
-                        }
-                        return true;
-                }
-                return false;
-            }
-        });
-        mainLayout.addView(startWorkoutButton);
-        
         // Ukryty stopWorkoutButton - używany wewnętrznie
         stopWorkoutButton = new Button(this);
         stopWorkoutButton.setVisibility(View.GONE);
+        
+        // === STARY TIMER HIIT USUNIĘTY NA STAŁE ===
+        // Użytkownik używa tylko Custom Workout (Konfigurator)
         
         // Przycisk TRENING BIEGOWY - będzie dodawany dynamicznie
         createRunningWorkoutButton();
@@ -971,7 +956,7 @@ public class MainActivity extends Activity {
         applyDefaultGradient(closeAppButton);
         LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, 120);
-        closeParams.setMargins(0, 20, 0, 0);
+        closeParams.setMargins(0, 20, 0, 12);
         closeAppButton.setLayoutParams(closeParams);
         closeAppButton.setOnTouchListener(new View.OnTouchListener() {
             @Override
@@ -994,6 +979,128 @@ public class MainActivity extends Activity {
             }
         });
         mainLayout.addView(closeAppButton);
+        
+        // Przycisk ZMIEŃ UŻYTKOWNIKA (długie przytrzymanie)
+        changeUserButton = new Button(this);
+        changeUserButton.setText("👤 ZMIEŃ UŻYTKOWNIKA");
+        changeUserButton.setTextSize(14);
+        applyDefaultGradient(changeUserButton);
+        changeUserButton.setOnTouchListener(new View.OnTouchListener() {
+            private boolean isChangePressActive = false;
+            private long changePressStartTime = 0;
+            private Runnable changeCountdownRunnable;
+            
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        isChangePressActive = true;
+                        changePressStartTime = System.currentTimeMillis();
+                        
+                        changeCountdownRunnable = new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isChangePressActive) return;
+                                
+                                long elapsed = System.currentTimeMillis() - changePressStartTime;
+                                int secondsLeft = 3 - (int)(elapsed / 1000);
+                                
+                                if (secondsLeft > 0) {
+                                    changeUserButton.setText("👤 ZMIENIAM (" + secondsLeft + "s)");
+                                    handler.postDelayed(this, 100);
+                                } else {
+                                    changeUserButton.setText("✅ ZMIENIAM!");
+                                    handler.postDelayed(() -> switchToUserSelection(), 500);
+                                }
+                            }
+                        };
+                        handler.post(changeCountdownRunnable);
+                        return true;
+                        
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        isChangePressActive = false;
+                        if (changeCountdownRunnable != null) {
+                            handler.removeCallbacks(changeCountdownRunnable);
+                        }
+                        changeUserButton.setText("👤 ZMIEŃ UŻYTKOWNIKA");
+                        return true;
+                }
+                return false;
+            }
+        });
+        LinearLayout.LayoutParams changeUserParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        changeUserParams.setMargins(0, 0, 0, 12);
+        changeUserButton.setLayoutParams(changeUserParams);
+        mainLayout.addView(changeUserButton);
+        
+        // SEKCJA: Sterowanie muzyką
+        TextView musicLabel = new TextView(this);
+        musicLabel.setText("\n🎵 STEROWANIE MUZYKĄ");
+        musicLabel.setTextSize(20);
+        musicLabel.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        mainLayout.addView(musicLabel);
+        
+        LinearLayout musicControlsLayout = new LinearLayout(this);
+        musicControlsLayout.setOrientation(LinearLayout.HORIZONTAL);
+        musicControlsLayout.setGravity(Gravity.CENTER);
+        musicControlsLayout.setPadding(20, 20, 20, 20);
+        
+        // Przycisk POPRZEDNI
+        musicPrevButton = new Button(this);
+        musicPrevButton.setText("⏮️");
+        musicPrevButton.setTextSize(24);
+        musicPrevButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                sendMediaButtonEvent(android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS);
+            }
+        });
+        applyDefaultGradient(musicPrevButton);
+        LinearLayout.LayoutParams prevParams = new LinearLayout.LayoutParams(
+            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
+        prevParams.setMargins(0, 0, 10, 0);
+        musicPrevButton.setLayoutParams(prevParams);
+        musicControlsLayout.addView(musicPrevButton);
+        
+        // Przycisk PLAY/PAUSE
+        musicPlayPauseButton = new Button(this);
+        musicPlayPauseButton.setText("⏯️");
+        musicPlayPauseButton.setTextSize(28);
+        musicPlayPauseButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                sendMediaButtonEvent(android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE);
+            }
+        });
+        applyDefaultGradient(musicPlayPauseButton);
+        LinearLayout.LayoutParams playPauseParams = new LinearLayout.LayoutParams(
+            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.5f);
+        playPauseParams.setMargins(10, 0, 10, 0);
+        musicPlayPauseButton.setLayoutParams(playPauseParams);
+        musicControlsLayout.addView(musicPlayPauseButton);
+        
+        // Przycisk NASTĘPNY
+        musicNextButton = new Button(this);
+        musicNextButton.setText("⏭️");
+        musicNextButton.setTextSize(24);
+        musicNextButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                sendMediaButtonEvent(android.view.KeyEvent.KEYCODE_MEDIA_NEXT);
+            }
+        });
+        applyDefaultGradient(musicNextButton);
+        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(
+            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
+        nextParams.setMargins(10, 0, 0, 0);
+        musicNextButton.setLayoutParams(nextParams);
+        musicControlsLayout.addView(musicNextButton);
+        
+        mainLayout.addView(musicControlsLayout);
         
         // Dodaj layout do ScrollView
         scrollView.addView(mainLayout);
@@ -1633,278 +1740,23 @@ public class MainActivity extends Activity {
     
     // Stara metoda usunięta - zastąpiona nowym systemem
     
-    private void startWorkoutCountdown() {
-        if (isWorkoutActive || isCountdownActive) return;
-        
-        Log.d(TAG, "🏃‍♂️ Rozpoczynam odliczanie CrossFit (10 sekund)");
-        isCountdownActive = true;
-        countdownSeconds = 30;
-        currentRound = 1;
-        isInWorkoutPhase = true;
-        
-        // Wyłącz przyciski ustawień
-        timerTypeButton.setEnabled(false);
-        
-        // Zablokuj przyciski konfiguracji WORK/REST/ROUNDS
-        workoutMinusButton.setEnabled(false);
-        workoutPlusButton.setEnabled(false);
-        restMinusButton.setEnabled(false);
-        restPlusButton.setEnabled(false);
-        roundsMinusButton.setEnabled(false);
-        roundsPlusButton.setEnabled(false);
-        
-        startWorkoutButton.setText("🛑 ZATRZYMAJ (przytrzymaj 5s)");
-        
-        // Rozpocznij odliczanie
-        countdownTick();
-    }
-    
-    private void countdownTick() {
-        if (countdownSeconds > 0) {
-            workoutTimerText.setText("START za: " + countdownSeconds);
-            
-            // TTS odliczanie - tylko ostatnie 10 sekund
-            if (countdownSeconds <= 10 && countdownSeconds > 5) {
-                speak(String.valueOf(countdownSeconds));
-            } else if (countdownSeconds <= 5) {
-                speak(String.valueOf(countdownSeconds));
-            }
-            
-            countdownSeconds--;
-            handler.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    countdownTick();
-                }
-            }, 1000);
-        } else {
-            // Koniec odliczania - rozpocznij trening!
-            workoutTimerText.setText("🔥 START! 🔥");
-            speak("Start!");
-            handler.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    startActualWorkout();
-                }
-            }, 500);
-        }
-    }
-    
-    private void startActualWorkout() {
-        Log.d(TAG, "🔥 TRENING ROZPOCZĘTY - Runda 1/" + totalRounds);
-        isCountdownActive = false;
-        isWorkoutActive = true;
-        setZoneMonitoringActive(true);
-        
-        // Włącz WakeLock - utrzyma CPU włączony
-        if (wakeLock != null && !wakeLock.isHeld()) {
-            wakeLock.acquire();
-            Log.d(TAG, "🔋 WakeLock włączony - CPU pozostanie aktywny");
-        }
-        
-        Log.d(TAG, "🎧 TTS będzie używał głośności: " + ttsVolumePercent + "%");
-        
-        // Ustaw czas dla pierwszej fazy (workout)
-        workoutTimeLeftSeconds = workoutTimeMinutes * 60;
-        startMainTimerCountdown(getCrossfitTotalSeconds(), "GŁÓWNY");
-        
-        // TTS start workout
-        speak("Work! Runda 1");
-        
-        // Włącz przycisk STOP
-        stopWorkoutButton.setEnabled(true);
-        
-        // Rozpocznij timer treningu
-        workoutTick();
-    }
-    
-    private void workoutTick() {
-        if (isWorkoutActive && workoutTimeLeftSeconds > 0) {
-            int minutes = workoutTimeLeftSeconds / 60;
-            int seconds = workoutTimeLeftSeconds % 60;
-            
-            String phaseText = isInWorkoutPhase ? "🏋️ WORK" : "😌 REST";
-            workoutTimerText.setText(String.format("%s: %02d:%02d (R%d/%d)", 
-                phaseText, minutes, seconds, currentRound, totalRounds));
-            
-            // TTS ostrzeżenia
-            if (isInWorkoutPhase && currentRound == totalRounds) {
-                // Ostatnia runda - specjalne ostrzeżenia
-                if (workoutTimeLeftSeconds == 60 && workoutTimeMinutes > 1) {
-                    speak("Jedna minuta do końca treningu");
-                }
-            } else {
-                // Normalne ostrzeżenia dla innych faz
-                if (workoutTimeLeftSeconds == 10) {
-                    String phaseTextTTS = isInWorkoutPhase ? "do resta" : "Jeszcze 10 sekund resta";
-                    speak(isInWorkoutPhase ? "Dziesięć sekund " + phaseTextTTS : phaseTextTTS);
-                }
-            }
-            
-            workoutTimeLeftSeconds--;
-            
-            handler.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    workoutTick();
-                }
-            }, 1000);
-        } else if (isWorkoutActive) {
-            // Koniec bieżącej fazy
-            switchWorkoutPhase();
-        }
-    }
-    
-    private void switchWorkoutPhase() {
-        if (isInWorkoutPhase) {
-            // Sprawdź czy to ostatnia runda - jeśli tak, zakończ trening
-            if (currentRound >= totalRounds) {
-                speak("Trening ukończony! Świetna robota!");
-                finishWorkout();
-                return;
-            }
-            
-            // Przechodzę z WORK na REST
-            if (restTimeSeconds > 0) {
-                isInWorkoutPhase = false;
-                workoutTimeLeftSeconds = restTimeSeconds;
-                Log.d(TAG, "🔄 Przechodzę na REST - " + restTimeSeconds + "s");
-                
-                // TTS przejście na REST
-                speak("Rest! " + getPolishTime(restTimeSeconds));
-                
-                workoutTick();
-            } else {
-                // Brak czasu odpoczynku, idę do następnej rundy
-                nextRound();
-            }
-        } else {
-            // Przechodzę z REST na następną rundę
-            nextRound();
-        }
-    }
-    
-    private void nextRound() {
-        currentRound++;
-        if (currentRound <= totalRounds) {
-            // Następna runda
-            isInWorkoutPhase = true;
-            workoutTimeLeftSeconds = workoutTimeMinutes * 60;
-            Log.d(TAG, "🔄 Runda " + currentRound + "/" + totalRounds);
-            
-            // TTS nowa runda
-            speak("Work! Runda " + currentRound);
-            
-            workoutTick();
-        } else {
-            // Koniec wszystkich rund!
-            finishWorkout();
-        }
-    }
-    
-    private void startStopTimer() {
-        if (!isWorkoutActive) return;
-        
-        isStopPressed = true;
-        stopPressCounter = 5;
-        startWorkoutButton.setText("🛑 ZATRZYMAJ " + stopPressCounter + "s");
-        
-        stopTimerTick();
-    }
-    
-    private void stopTimerTick() {
-        if (isStopPressed && stopPressCounter > 0) {
-            stopPressCounter--;
-            startWorkoutButton.setText("🛑 ZATRZYMAJ " + stopPressCounter + "s");
-            
-            handler.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    stopTimerTick();
-                }
-            }, 1000);
-        } else if (isStopPressed && stopPressCounter == 0) {
-            // Zatrzymaj trening
-            stopWorkout();
-        }
-    }
-    
-    private void cancelStopTimer() {
-        if (isStopPressed) {
-            isStopPressed = false;
-            startWorkoutButton.setText("🛑 ZATRZYMAJ (przytrzymaj 5s)");
-            Log.d(TAG, "⚠️ Anulowano zatrzymanie treningu");
-        }
-    }
-    
-    private void stopWorkout() {
-        Log.d(TAG, "🚫 TRENING ZATRZYMANY przez użytkownika");
-        stopMainTimerCountdown();
-        isWorkoutActive = false;
-        setZoneMonitoringActive(false);
-        isStopPressed = false;
-        
-        // Wyłącz WakeLock
-        if (wakeLock != null && wakeLock.isHeld()) {
-            wakeLock.release();
-            Log.d(TAG, "🔋 WakeLock wyłączony");
-        }
-        
-        // TTS zatrzymanie
-        speak("Trening zatrzymany");
-        
-        resetWorkoutUI();
-    }
-    
-    private void finishWorkout() {
-        Log.d(TAG, "✅ TRENING ZAKOŃCZONY - czas minął!");
-        stopMainTimerCountdown();
-        isWorkoutActive = false;
-        setZoneMonitoringActive(false);
-        
-        // Wyłącz WakeLock
-        if (wakeLock != null && wakeLock.isHeld()) {
-            wakeLock.release();
-            Log.d(TAG, "🔋 WakeLock wyłączony");
-        }
-        
-        workoutTimerText.setText("🎉 TRENING SKOŃCZONY! 🎉");
-        
-        // TTS koniec treningu
-        speak("Trening ukończony! Świetna robota!");
-        
-        handler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                resetWorkoutUI();
-            }
-        }, 3000);
-    }
-    
-    private void resetWorkoutUI() {
-        // Przywróć interfejs do stanu początkowego
-        workoutTimerText.setText("Gotowy do treningu!");
-        startWorkoutButton.setText("🏃‍♂️ START TRENINGU");
-        
-        // Reset zmiennych
-        currentRound = 0;
-        isInWorkoutPhase = true;
-        
-        // Włącz przyciski
-        timerTypeButton.setEnabled(true);
-        
-        // Odblokuj przyciski konfiguracji WORK/REST/ROUNDS
-        workoutMinusButton.setEnabled(true);
-        workoutPlusButton.setEnabled(true);
-        restMinusButton.setEnabled(true);
-        restPlusButton.setEnabled(true);
-        roundsMinusButton.setEnabled(true);
-        roundsPlusButton.setEnabled(true);
-        
-        updateMainTimerDisplay();
-        
-        Log.d(TAG, "🔄 Interface zurückgesetzt für nächstes Training");
-    }
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STARY HIIT TIMER (WORK/REST/ROUNDS) USUNIĘTY - UŻYWAMY CUSTOM WORKOUT
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Metody usunięte (2025-01-04):
+    // - startWorkoutCountdown() - countdown 30s przed startem HIIT
+    // - countdownTick() - tick countdown
+    // - startActualWorkout() - start HIIT po countdown
+    // - workoutTick() - główny timer WORK/REST
+    // - switchWorkoutPhase() - zmiana WORK→REST
+    // - nextRound() - następna runda
+    // - startStopTimer(), stopTimerTick(), cancelStopTimer() - zatrzymywanie
+    // - stopWorkout() - stop przez użytkownika
+    // - finishWorkout() - koniec wszystkich rund
+    // - resetWorkoutUI() - reset UI
+    //
+    // OBECNIE UŻYWAMY CUSTOM WORKOUT (startCustomWorkout, customWorkoutTick, etc.)
+    // ═══════════════════════════════════════════════════════════════════════════
     
     // ===== NOWE METODY DLA SYSTEMU TIMERÓW =====
     
@@ -1915,8 +1767,7 @@ public class MainActivity extends Activity {
             timerSettingsLayout.setVisibility(View.GONE);
             runningSettingsLayout.setVisibility(View.VISIBLE); // Pokaż kontrolki biegowe
             updateMainTimerDisplay();
-            // Ukryj przyciski treningu treningowego
-            startWorkoutButton.setVisibility(View.GONE);
+            // Ukryj przyciski treningu treningowego (STARY HIIT - USUNIĘTY)
             stopWorkoutButton.setVisibility(View.GONE);
             // workoutTimerText pozostaje widoczny - potrzebny dla GPS!
             workoutTimerText.setText("🏃‍♂️ Gotowy do treningu biegowego");
@@ -1928,7 +1779,6 @@ public class MainActivity extends Activity {
             runningSettingsLayout.setVisibility(View.GONE); // Ukryj kontrolki biegowe
             updateMainTimerDisplay();
             // Pokaż z powrotem przyciski treningu treningowego
-            startWorkoutButton.setVisibility(View.VISIBLE);
             stopWorkoutButton.setVisibility(View.VISIBLE);
             workoutTimerText.setVisibility(View.VISIBLE);
             // Przywróć normalny tekst timera
@@ -2322,13 +2172,44 @@ public class MainActivity extends Activity {
     private void speakZone(String text) {
         speakInternal(text, true);
     }
+    
+    /**
+     * Wysyła komendę sterowania odtwarzaczem muzyki (Play/Pause/Next/Previous)
+     */
+    private void sendMediaButtonEvent(int keyCode) {
+        try {
+            // Metoda 1: KeyEvent broadcast
+            long eventTime = System.currentTimeMillis();
+            android.view.KeyEvent downEvent = new android.view.KeyEvent(eventTime, eventTime, 
+                android.view.KeyEvent.ACTION_DOWN, keyCode, 0);
+            android.view.KeyEvent upEvent = new android.view.KeyEvent(eventTime, eventTime, 
+                android.view.KeyEvent.ACTION_UP, keyCode, 0);
+            
+            Intent downIntent = new Intent(Intent.ACTION_MEDIA_BUTTON);
+            downIntent.putExtra(Intent.EXTRA_KEY_EVENT, downEvent);
+            sendOrderedBroadcast(downIntent, null);
+            
+            Intent upIntent = new Intent(Intent.ACTION_MEDIA_BUTTON);
+            upIntent.putExtra(Intent.EXTRA_KEY_EVENT, upEvent);
+            sendOrderedBroadcast(upIntent, null);
+            
+            Log.d(TAG, "🎵 Media button sent: " + keyCode);
+            
+            // Metoda 2: AudioManager dla starszych Androidów
+            if (audioManager != null) {
+                audioManager.dispatchMediaKeyEvent(downEvent);
+                audioManager.dispatchMediaKeyEvent(upEvent);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "❌ Błąd sterowania muzyką: " + e.getMessage());
+            Toast.makeText(this, "❌ Nie można sterować muzyką", Toast.LENGTH_SHORT).show();
+        }
+    }
 
     private void speakInternal(String text, boolean zoneMessage) {
         if (isTtsReady && tts != null) {
-            // Ustaw głośność według preferencji użytkownika
-            float volumeFloat = ttsVolumePercent / 100.0f; // 0.0 - 1.0
+            float volumeFloat = zoneMessage ? 0.7f : (ttsVolumePercent / 100.0f);
             
-            // Bundle z parametrami głośności dla TTS
             android.os.Bundle params = new android.os.Bundle();
             params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volumeFloat);
             
@@ -2342,7 +2223,6 @@ public class MainActivity extends Activity {
             } else {
                 lastTimerSpeakTimestamp = now;
             }
-            Log.d(TAG, "🔊 TTS (" + ttsVolumePercent + "%, vol=" + volumeFloat + "): " + text);
         } else {
             Log.w(TAG, "⚠️ TTS nie gotowy: " + text);
         }
@@ -2968,26 +2848,7 @@ public class MainActivity extends Activity {
         
         Log.d(TAG, "♻️ Stan treningu przywrócony - CrossFit: " + isWorkoutActive + ", Biegowy: " + isRunningWorkoutActive);
         
-        // Wznów trening CrossFit jeśli był aktywny
-        if (isWorkoutActive) {
-            Log.d(TAG, "🔄 Wznawianie treningu CrossFit - Runda " + currentRound + "/" + totalRounds);
-            setZoneMonitoringActive(true);
-            
-            // Włącz WakeLock
-            if (wakeLock != null && !wakeLock.isHeld()) {
-                wakeLock.acquire();
-                Log.d(TAG, "🔋 WakeLock włączony przy wznowieniu");
-            }
-            
-            // Wznów timer
-            if (isCountdownActive) {
-                countdownTick();
-            } else {
-                workoutTick();
-            }
-            
-            updateMainTimerDisplay();
-        }
+        // STARY HIIT TIMER USUNIĘTY - nie wznawiamy treningu CrossFit (używamy Custom Workout)
         
         // Wznów trening biegowy jeśli był aktywny
         if (isRunningWorkoutActive) {
@@ -3996,7 +3857,7 @@ public class MainActivity extends Activity {
         
         // Oznacz jako aktywny JUŻ TERAZ (przed countdown)
         isCustomWorkoutActive = true;
-        customWorkoutStartTime = System.currentTimeMillis();
+        // customWorkoutStartTime będzie ustawiony DOPIERO po countdown
         
         // Zmień przycisk na STOP
         if (customStartStopButton != null) {
@@ -4082,14 +3943,9 @@ public class MainActivity extends Activity {
             customBlockTimeText.setTextSize(144); // Przywróć normalny rozmiar
             customBlockTimeText.setText("🔥 GO! 🔥");
             customBlockTimeText.setTextColor(0xFFFF0000); // Czerwony
-            // Bez TTS - zaraz ogłosimy pierwszy blok
             
-            handler.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    startCustomWorkoutExecution();
-                }
-            }, 1000);
+            // Rozpocznij NATYCHMIAST bez dodatkowego delay
+            startCustomWorkoutExecution();
         }
     }
     
@@ -4099,6 +3955,9 @@ public class MainActivity extends Activity {
     private void startCustomWorkoutExecution() {
         Log.d(TAG, "🔥 CUSTOM WORKOUT ROZPOCZĘTY");
         isCustomWorkoutActive = true;
+        
+        // TERAZ zapisz czas startu - DOPIERO PO countdown!
+        customWorkoutStartTime = System.currentTimeMillis();
         
         // Włącz WakeLock
         if (wakeLock != null && !wakeLock.isHeld()) {
@@ -4231,16 +4090,47 @@ public class MainActivity extends Activity {
     }
     
     /**
-     * Ticker - odlicza co sekundę
+     * Ticker - odlicza co sekundę (RZECZYWISTY CZAS)
      */
     private void customWorkoutTick() {
         if (!isCustomWorkoutActive) {
             return;
         }
         
+        // Oblicz rzeczywisty upływ czasu
+        long elapsedMs = System.currentTimeMillis() - customWorkoutStartTime;
+        int elapsedSeconds = (int) (elapsedMs / 1000);
+        
+        // Oblicz pozostały czas na podstawie rzeczywistego czasu
+        totalSecondsLeft = totalWorkoutSeconds - elapsedSeconds;
+        
         if (totalSecondsLeft <= 0) {
             finishCustomWorkout();
             return;
+        }
+        
+        // Oblicz czas pozostały w aktualnym bloku
+        int secondsIntoWorkout = elapsedSeconds;
+        int accumulatedSeconds = 0;
+        int blockIndex = 0;
+        
+        for (int i = 0; i < customWorkoutBlocks.size(); i++) {
+            TrainingBlock block = customWorkoutBlocks.get(i);
+            int blockDuration = block.getDurationSeconds();
+            
+            if (secondsIntoWorkout < accumulatedSeconds + blockDuration) {
+                blockIndex = i;
+                currentBlockSecondsLeft = accumulatedSeconds + blockDuration - secondsIntoWorkout;
+                break;
+            }
+            
+            accumulatedSeconds += blockDuration;
+        }
+        
+        // Sprawdź czy zmienił się blok
+        if (blockIndex != currentBlockIndex) {
+            currentBlockIndex = blockIndex;
+            loadCurrentBlock();
         }
         
         if (currentBlockSecondsLeft <= 0) {
@@ -4300,9 +4190,7 @@ public class MainActivity extends Activity {
             checkAndScrollToTimer();
         }
         
-        // Odliczaj
-        totalSecondsLeft--;
-        currentBlockSecondsLeft--;
+        // BRAK dekrementacji - liczymy na podstawie rzeczywistego czasu!
         
         handler.postDelayed(new Runnable() {
             @Override
@@ -4432,5 +4320,29 @@ public class MainActivity extends Activity {
     private void openCustomWorkoutConfigurator() {
         Intent intent = new Intent(this, CustomWorkoutActivity.class);
         startActivity(intent);
+    }
+    
+    /**
+     * Przełącza na ekran wyboru użytkownika (czyści zapisany wybór)
+     */
+    private void switchToUserSelection() {
+        // Wyczyść zapisany wybór użytkownika
+        SharedPreferences prefs = getSharedPreferences("user_prefs", MODE_PRIVATE);
+        SharedPreferences.Editor editor = prefs.edit();
+        editor.remove("selected_user");
+        editor.remove("selected_mac");
+        editor.apply();
+        
+        // Rozłącz Bluetooth
+        if (bluetoothGatt != null) {
+            bluetoothGatt.disconnect();
+            bluetoothGatt.close();
+            bluetoothGatt = null;
+        }
+        
+        // Przejdź do ekranu wyboru
+        Intent intent = new Intent(this, UserSelectionActivity.class);
+        startActivity(intent);
+        finish();
     }
 }
