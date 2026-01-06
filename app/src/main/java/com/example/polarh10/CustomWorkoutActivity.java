@@ -6,10 +6,13 @@ import android.content.ClipData;
 import android.content.SharedPreferences;
 import android.graphics.Paint;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.DragEvent;
 import android.view.Gravity;
 import android.view.View;
+import android.view.WindowInsets;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -72,10 +75,34 @@ public class CustomWorkoutActivity extends Activity {
      * Tworzy cały interfejs użytkownika
      */
     private void createUI() {
+        // Główny ScrollView
+        ScrollView rootScrollView = new ScrollView(this);
+        rootScrollView.setFillViewport(true);
+        
         LinearLayout mainLayout = new LinearLayout(this);
         mainLayout.setOrientation(LinearLayout.VERTICAL);
         mainLayout.setBackgroundColor(0xFF1a1a1a);
         mainLayout.setPadding(20, 20, 20, 20);
+        
+        // === OBSŁUGA WINDOWINSETS (status bar + navigation bar) ===
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            mainLayout.setOnApplyWindowInsetsListener((v, insets) -> {
+                WindowInsets windowInsets = insets;
+                int topInset = windowInsets.getInsets(WindowInsets.Type.systemBars()).top;
+                int bottomInset = windowInsets.getInsets(WindowInsets.Type.systemBars()).bottom;
+                mainLayout.setPadding(20, 20 + topInset, 20, 20 + bottomInset);
+                Log.d(TAG, "WindowInsets applied: top=" + topInset + ", bottom=" + bottomInset);
+                return windowInsets;
+            });
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
+            mainLayout.setOnApplyWindowInsetsListener((v, insets) -> {
+                int topInset = insets.getSystemWindowInsetTop();
+                int bottomInset = insets.getSystemWindowInsetBottom();
+                mainLayout.setPadding(20, 20 + topInset, 20, 20 + bottomInset);
+                Log.d(TAG, "WindowInsets applied: top=" + topInset + ", bottom=" + bottomInset);
+                return insets;
+            });
+        }
         
         // === NAGŁÓWEK ===
         createHeader(mainLayout);
@@ -98,7 +125,8 @@ public class CustomWorkoutActivity extends Activity {
         // === PRZYCISKI AKCJI ===
         createActionButtons(mainLayout);
         
-        setContentView(mainLayout);
+        rootScrollView.addView(mainLayout);
+        setContentView(rootScrollView);
     }
     
     /**
@@ -117,12 +145,13 @@ public class CustomWorkoutActivity extends Activity {
             0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
         
         Button closeButton = new Button(this);
-        closeButton.setText("✕");
-        closeButton.setTextSize(24);
+        closeButton.setText("✖ ZAMKNIJ");
+        closeButton.setTextSize(16);
         closeButton.setTextColor(0xFFFFFFFF);
-        closeButton.setBackgroundColor(0xFF444444);
+        closeButton.setBackgroundColor(0xFFFF0000);
         closeButton.setLayoutParams(new LinearLayout.LayoutParams(
-            100, 100));
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        closeButton.setPadding(20, 10, 20, 10);
         closeButton.setOnClickListener(v -> finish());
         
         headerLayout.addView(titleText);
