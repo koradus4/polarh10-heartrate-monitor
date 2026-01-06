@@ -13,8 +13,8 @@ android {
         applicationId = "pl.fitness.polarh10"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "v1.0.19"
+        versionCode = 21
+        versionName = "v1.0.20"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

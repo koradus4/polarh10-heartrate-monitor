@@ -54,7 +54,6 @@ import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.content.Intent;
 import android.widget.Toast;
-import android.widget.SeekBar;
 
 public class MainActivity extends Activity {
     
@@ -98,7 +97,6 @@ public class MainActivity extends Activity {
     private Button runningWorkoutButton;
     private Button closeAppButton;
     private Button showMapButton;
-    private Button volumeButton;
     private Button configuratorButton;
     private Button customStartStopButton;
     private Button changeUserButton;
@@ -196,8 +194,8 @@ public class MainActivity extends Activity {
     private TextToSpeech tts;
     private AudioManager audioManager;
     private boolean isTtsReady = false;
-    private int ttsVolumePercent = 80; // Głośność TTS w procentach (0-100)
     // DUCK SYSTEM REMOVED - przyciski muzyki bez auto-duck
+    private boolean isBackgroundMusicPausedByApp = false;
     
     // WakeLock - utrzymuje CPU włączony podczas treningu
     private PowerManager.WakeLock wakeLock;
@@ -332,7 +330,6 @@ public class MainActivity extends Activity {
             closeAppButton,
             configuratorButton,
             customStartStopButton,
-            volumeButton,
             changeUserButton,
             musicPrevButton,
             musicPlayPauseButton,
@@ -410,17 +407,16 @@ public class MainActivity extends Activity {
         mainLayout.setPadding(30, 30, 30, 200); // Zwiększony padding na dole dla paska nawigacyjnego
 
         loadHrZonePreferences();
-        loadTtsVolumePreference(); // Załaduj głośność z SharedPreferences
         
-        // Ustaw głośność telefonu na zapamiętaną wartość
+        // Ustaw domyślną głośność muzyki po uruchomieniu (30%)
         if (audioManager != null) {
             int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-            int targetVolume = (int) ((ttsVolumePercent / 100.0f) * maxVolume);
+            int targetVolume = (int) (0.30f * maxVolume);
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0);
-            Log.d(TAG, "🔊 STARTUP: Ustawiono głośność telefonu na " + ttsVolumePercent + "% (" + targetVolume + "/" + maxVolume + ")");
+            Log.d(TAG, "🔊 STARTUP: Ustawiono głośność muzyki na 30% (" + targetVolume + "/" + maxVolume + ")");
         }
         
-        // Layout poziomy dla czasu i przycisku głośności
+        // Layout poziomy dla czasu
         LinearLayout topBarLayout = new LinearLayout(this);
         topBarLayout.setOrientation(LinearLayout.HORIZONTAL);
         topBarLayout.setLayoutParams(new LinearLayout.LayoutParams(
@@ -439,22 +435,6 @@ public class MainActivity extends Activity {
         ));
         currentTimeText.setTextAlignment(View.TEXT_ALIGNMENT_VIEW_START);
         topBarLayout.addView(currentTimeText);
-        
-        // Przycisk głośności TTS (po prawej)
-        volumeButton = new Button(this);
-        updateVolumeButtonIcon();
-        volumeButton.setTextSize(16);
-        volumeButton.setLayoutParams(new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ));
-        volumeButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                showVolumeSettingsDialog();
-            }
-        });
-        topBarLayout.addView(volumeButton);
         
         mainLayout.addView(topBarLayout);
         
@@ -2005,124 +1985,6 @@ public class MainActivity extends Activity {
         Log.d(TAG, "Target distance: " + (targetDistanceKm == 0 ? "unlimited" : targetDistanceKm + " km"));
     }
     
-    // ===== TTS VOLUME METHODS =====
-    
-    private void loadTtsVolumePreference() {
-        SharedPreferences prefs = getSharedPreferences("PolarH10Prefs", MODE_PRIVATE);
-        ttsVolumePercent = prefs.getInt("tts_volume_percent", 80); // domyślnie 80%
-        Log.d(TAG, "📊 Załadowano głośność TTS: " + ttsVolumePercent + "%");
-    }
-    
-    private void saveTtsVolumePreference() {
-        SharedPreferences prefs = getSharedPreferences("PolarH10Prefs", MODE_PRIVATE);
-        prefs.edit().putInt("tts_volume_percent", ttsVolumePercent).apply();
-        Log.d(TAG, "💾 Zapisano głośność TTS: " + ttsVolumePercent + "%");
-    }
-    
-    private void updateVolumeButtonIcon() {
-        String icon;
-        if (ttsVolumePercent <= 20) {
-            icon = "🔇 " + ttsVolumePercent + "%";
-        } else if (ttsVolumePercent <= 60) {
-            icon = "🔉 " + ttsVolumePercent + "%";
-        } else {
-            icon = "🔊 " + ttsVolumePercent + "%";
-        }
-        volumeButton.setText(icon);
-    }
-    
-    private void showVolumeSettingsDialog() {
-        if (isWorkoutActive || isRunningWorkoutActive) {
-            Toast.makeText(this, "⚠️ Nie można zmienić głośności podczas treningu", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("TTS");
-        
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(50, 40, 50, 40);
-        
-        // TextView pokazujący aktualną głośność
-        final TextView volumeLabel = new TextView(this);
-        volumeLabel.setText("🔊 Głośność: " + ttsVolumePercent + "%");
-        volumeLabel.setTextSize(18);
-        volumeLabel.setPadding(0, 0, 0, 20);
-        layout.addView(volumeLabel);
-        
-        // SeekBar z krokiem co 10%
-        final SeekBar seekBar = new SeekBar(this);
-        seekBar.setMax(10); // 0-10 (każdy krok = 10%)
-        seekBar.setProgress(ttsVolumePercent / 10);
-        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                int newVolume = progress * 10;
-                volumeLabel.setText("🔊 Głośność: " + newVolume + "%");
-            }
-            
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {}
-            
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {}
-        });
-        layout.addView(seekBar);
-        
-        // Przycisk testowy
-        Button testButton = new Button(this);
-        testButton.setText("🔊 Testuj");
-        testButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                int testVolume = seekBar.getProgress() * 10;
-                // Tymczasowo zapisz testową głośność
-                int savedVolume = ttsVolumePercent;
-                ttsVolumePercent = testVolume;
-                speak("Testowanie głośności TTS na poziomie " + testVolume + " procent");
-                // Przywróć poprzednią wartość (test nie zapisuje na stałe)
-                handler.postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        ttsVolumePercent = savedVolume;
-                    }
-                }, 100);
-            }
-        });
-        LinearLayout.LayoutParams testButtonParams = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        testButtonParams.setMargins(0, 30, 0, 0);
-        testButton.setLayoutParams(testButtonParams);
-        layout.addView(testButton);
-        
-        builder.setView(layout);
-        
-        builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-                ttsVolumePercent = seekBar.getProgress() * 10;
-                saveTtsVolumePreference();
-                updateVolumeButtonIcon();
-                
-                // Ustaw głośność telefonu na wybrany poziom
-                if (audioManager != null) {
-                    int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-                    int targetVolume = (int) ((ttsVolumePercent / 100.0f) * maxVolume);
-                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0);
-                    Log.d(TAG, "🔊 Ustawiono głośność telefonu: " + ttsVolumePercent + "% (" + targetVolume + "/" + maxVolume + ")");
-                }
-                
-                Toast.makeText(MainActivity.this, "✅ Głośność TTS: " + ttsVolumePercent + "%", Toast.LENGTH_SHORT).show();
-            }
-        });
-        
-        builder.setNegativeButton("Anuluj", null);
-        builder.show();
-    }
-    
     // ===== TTS METHODS =====
     
     private void initializeTTS() {
@@ -2169,8 +2031,22 @@ public class MainActivity extends Activity {
         speakInternal(text, false);
     }
 
-    private void speakZone(String text) {
-        speakInternal(text, true);
+    private void pauseBackgroundMusicIfNeeded() {
+        if (isBackgroundMusicPausedByApp) {
+            return;
+        }
+        sendMediaButtonEvent(android.view.KeyEvent.KEYCODE_MEDIA_PAUSE);
+        isBackgroundMusicPausedByApp = true;
+        Log.d(TAG, "🎵 Music paused by app");
+    }
+
+    private void resumeBackgroundMusicIfNeeded() {
+        if (!isBackgroundMusicPausedByApp) {
+            return;
+        }
+        sendMediaButtonEvent(android.view.KeyEvent.KEYCODE_MEDIA_PLAY);
+        isBackgroundMusicPausedByApp = false;
+        Log.d(TAG, "🎵 Music resumed by app");
     }
     
     /**
@@ -2208,7 +2084,7 @@ public class MainActivity extends Activity {
 
     private void speakInternal(String text, boolean zoneMessage) {
         if (isTtsReady && tts != null) {
-            float volumeFloat = zoneMessage ? 0.7f : (ttsVolumePercent / 100.0f);
+            float volumeFloat = 1.0f;
             
             android.os.Bundle params = new android.os.Bundle();
             params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volumeFloat);
@@ -2671,56 +2547,9 @@ public class MainActivity extends Activity {
     }
 
     private void maybeAnnounceZone(int zone) {
-        if (!isZoneMonitoringActive) {
-            return;
-        }
-        if (!isInWorkoutPhase) {
-            return;
-        }
-        if (!isTtsReady || tts == null) {
-            return;
-        }
-
-        long now = System.currentTimeMillis();
-
-        if (zone == 0) {
-            if (lastZoneAnnounced != zone) {
-                lastZoneAnnounced = zone;
-                lastZoneAnnouncementTime = now;
-                return;
-            }
-            if (now - lastZoneAnnouncementTime < 60000) {
-                return;
-            }
-            if (now - lastTimerSpeakTimestamp < 2000 || now - lastZoneSpeakTimestamp < 5000) {
-                return;
-            }
-            if (tts.isSpeaking()) {
-                return;
-            }
-            speakZone("Przyspiesz!!!");
-            lastZoneAnnouncementTime = now;
-        } else if (zone == 3) {
-            if (lastZoneAnnounced != zone) {
-                lastZoneAnnounced = zone;
-                lastZoneAnnouncementTime = now;
-                return;
-            }
-            if (now - lastZoneAnnouncementTime < 15000) {
-                return;
-            }
-            if (now - lastTimerSpeakTimestamp < 2000 || now - lastZoneSpeakTimestamp < 3000) {
-                return;
-            }
-            if (tts.isSpeaking()) {
-                return;
-            }
-            speakZone("Zwolnij, jesteś poza strefą pracy!!!");
-            lastZoneAnnouncementTime = now;
-        } else {
-            lastZoneAnnounced = -1;
-            lastZoneAnnouncementTime = 0L;
-        }
+        // Cofnięto komunikaty głosowe związane ze strefami tętna.
+        // Zostają tylko kolory/miganie stref.
+        return;
     }
 
     private void resetZoneFeedback() {
@@ -3926,6 +3755,7 @@ public class MainActivity extends Activity {
             
             // TTS: 30s na starcie, potem 10-1
             if (secondsLeft == 30) {
+                pauseBackgroundMusicIfNeeded();
                 speak("30 sekund");
             } else if (secondsLeft <= 10) {
                 speak(String.valueOf(secondsLeft));
@@ -4069,6 +3899,18 @@ public class MainActivity extends Activity {
      */
     private void announceBlock(TrainingBlock block) {
         String announcement = "";
+
+        // Muzyka: trening gra, countdown/rest/break/end pauza
+        switch (block.getType()) {
+            case WORKOUT:
+                resumeBackgroundMusicIfNeeded();
+                break;
+            case REST:
+            case BREAK:
+            case END:
+                pauseBackgroundMusicIfNeeded();
+                break;
+        }
         
         switch (block.getType()) {
             case WORKOUT:

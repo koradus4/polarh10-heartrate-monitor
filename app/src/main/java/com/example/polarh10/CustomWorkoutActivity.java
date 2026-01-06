@@ -321,14 +321,14 @@ public class CustomWorkoutActivity extends Activity {
     private void adjustTemplateTime(TrainingBlock.BlockType type, int direction) {
         int step = 0;
         
-        if (type == TrainingBlock.BlockType.WORKOUT || type == TrainingBlock.BlockType.BREAK) {
-            step = 60; // 1 minuta
-        } else if (type == TrainingBlock.BlockType.REST) {
+        if (type == TrainingBlock.BlockType.WORKOUT || type == TrainingBlock.BlockType.REST) {
             step = 15; // 15 sekund
+        } else if (type == TrainingBlock.BlockType.BREAK) {
+            step = 60; // 1 minuta
         }
         
         if (type == TrainingBlock.BlockType.WORKOUT) {
-            workoutTemplateSeconds = Math.max(60, workoutTemplateSeconds + (direction * step));
+            workoutTemplateSeconds = Math.max(15, workoutTemplateSeconds + (direction * step));
         } else if (type == TrainingBlock.BlockType.REST) {
             restTemplateSeconds = Math.max(15, restTemplateSeconds + (direction * step));
         } else if (type == TrainingBlock.BlockType.BREAK) {
