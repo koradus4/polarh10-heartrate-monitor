@@ -17,6 +17,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.PackageInfo;
 import android.net.Uri;
 import android.os.Build;
+import android.view.WindowInsets;
 import android.os.Bundle;
 import android.os.Handler;
 import android.provider.Settings;
@@ -24,6 +25,7 @@ import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -199,6 +201,15 @@ public class MainActivity extends Activity {
     
     // WakeLock - utrzymuje CPU włączony podczas treningu
     private PowerManager.WakeLock wakeLock;
+
+    private void updateKeepScreenOnState() {
+        boolean shouldKeepScreenOn = isCustomWorkoutActive || isRunningCountdownActive || isRunningWorkoutActive;
+        if (shouldKeepScreenOn) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        } else {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
+    }
     
     // Trening biegowy - GPS i tracking
     private LocationManager locationManager;
@@ -404,7 +415,38 @@ public class MainActivity extends Activity {
 
         mainLayout = new LinearLayout(this);
         mainLayout.setOrientation(LinearLayout.VERTICAL);
-        mainLayout.setPadding(30, 30, 30, 200); // Zwiększony padding na dole dla paska nawigacyjnego
+        final int basePaddingLeft = 30;
+        final int basePaddingTop = 30;
+        final int basePaddingRight = 30;
+        final int basePaddingBottom = 200; // Bazowy padding na dole
+        mainLayout.setPadding(basePaddingLeft, basePaddingTop, basePaddingRight, basePaddingBottom);
+
+        // WindowInsets: dopasuj padding do status/navigation bar (żeby góra nie była ucięta na innych telefonach)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            scrollView.setOnApplyWindowInsetsListener((v, insets) -> {
+                int topInset = insets.getInsets(WindowInsets.Type.systemBars()).top;
+                int bottomInset = insets.getInsets(WindowInsets.Type.systemBars()).bottom;
+                mainLayout.setPadding(
+                    basePaddingLeft,
+                    basePaddingTop + topInset,
+                    basePaddingRight,
+                    basePaddingBottom + bottomInset
+                );
+                return insets;
+            });
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
+            scrollView.setOnApplyWindowInsetsListener((v, insets) -> {
+                int topInset = insets.getSystemWindowInsetTop();
+                int bottomInset = insets.getSystemWindowInsetBottom();
+                mainLayout.setPadding(
+                    basePaddingLeft,
+                    basePaddingTop + topInset,
+                    basePaddingRight,
+                    basePaddingBottom + bottomInset
+                );
+                return insets;
+            });
+        }
 
         loadHrZonePreferences();
         
@@ -2842,6 +2884,7 @@ public class MainActivity extends Activity {
         Log.d(TAG, "🏃‍♂️ Rozpoczynam odliczanie przed biegiem (30 sekund)");
         isRunningCountdownActive = true;
         runningCountdownSeconds = 30;
+        updateKeepScreenOnState();
         
         // Zablokuj przyciski konfiguracji treningu biegowego
         runningTimeMinusButton.setEnabled(false);
@@ -2891,6 +2934,7 @@ public class MainActivity extends Activity {
         Log.d(TAG, "🏃‍♂️ ROZPOCZYNAM TRENING BIEGOWY z GPS");
         isRunningCountdownActive = false;
         isRunningWorkoutActive = true;
+        updateKeepScreenOnState();
         setZoneMonitoringActive(true);
         startMainTimerCountdown(runningTimerMinutes * 60, "BIEG");
         if (timerTypeButton != null) {
@@ -2962,6 +3006,7 @@ public class MainActivity extends Activity {
             speak("Błąd! Brak uprawnień GPS");
             stopMainTimerCountdown();
             isRunningWorkoutActive = false;
+            updateKeepScreenOnState();
             if (wakeLock != null && wakeLock.isHeld()) {
                 wakeLock.release();
             }
@@ -3113,6 +3158,7 @@ public class MainActivity extends Activity {
         if (isRunningCountdownActive) {
             Log.d(TAG, "🛑 ANULOWANO ODLICZANIE przed biegiem");
             isRunningCountdownActive = false;
+            updateKeepScreenOnState();
             handler.removeCallbacksAndMessages(null); // Usuń wszystkie callbacki
             workoutTimerText.setText("🏃‍♂️ Gotowy do treningu biegowego");
             
@@ -3134,12 +3180,14 @@ public class MainActivity extends Activity {
             stopMainTimerCountdown();
             updateMainTimerDisplay();
             setRunningButtonToStartState();
+            updateKeepScreenOnState();
             return;
         }
         
         Log.d(TAG, "🛑 ZATRZYMUJĘ TRENING BIEGOWY");
         stopMainTimerCountdown();
         isRunningWorkoutActive = false;
+        updateKeepScreenOnState();
         setZoneMonitoringActive(false);
         WorkoutForegroundService.stop(getApplicationContext());
         if (timerTypeButton != null) {
@@ -3686,6 +3734,7 @@ public class MainActivity extends Activity {
         
         // Oznacz jako aktywny JUŻ TERAZ (przed countdown)
         isCustomWorkoutActive = true;
+        updateKeepScreenOnState();
         // customWorkoutStartTime będzie ustawiony DOPIERO po countdown
         
         // Zmień przycisk na STOP
@@ -3712,6 +3761,7 @@ public class MainActivity extends Activity {
     private void stopCustomWorkout() {
         Log.d(TAG, "🛑 Zatrzymuję Custom Workout");
         isCustomWorkoutActive = false;
+        updateKeepScreenOnState();
         setZoneMonitoringActive(false);
         
         // Anuluj wszystkie pending callbacks
@@ -3820,33 +3870,73 @@ public class MainActivity extends Activity {
      * Przewija ekran do kontenera z timerem treningu
      */
     private void scrollToWorkoutTimer() {
-        if (scrollView != null && customWorkoutContainer != null) {
-            scrollView.post(() -> {
-                int[] location = new int[2];
-                customWorkoutContainer.getLocationOnScreen(location);
-                int containerY = location[1];
-                
-                int[] scrollLocation = new int[2];
-                scrollView.getLocationOnScreen(scrollLocation);
-                int scrollY = scrollLocation[1];
-                
-                // Przewiń bardziej w dół, żeby pełny timer "Całość:" był widoczny
-                targetScrollY = Math.max(0, containerY - scrollY + 300);
-                scrollView.smoothScrollTo(0, targetScrollY);
-            });
+        if (scrollView == null || customWorkoutContainer == null) {
+            return;
         }
+        scrollView.post(() -> {
+            int target = computeTargetScrollForCustomTimers();
+            if (target >= 0) {
+                targetScrollY = target;
+                scrollView.smoothScrollTo(0, targetScrollY);
+            }
+        });
+    }
+
+    private int computeTargetScrollForCustomTimers() {
+        if (scrollView == null || customTotalTimeText == null || customBlockTimeText == null) {
+            return -1;
+        }
+
+        int[] scrollLocation = new int[2];
+        scrollView.getLocationOnScreen(scrollLocation);
+        int scrollViewTopOnScreen = scrollLocation[1];
+        int scrollViewHeight = scrollView.getHeight();
+        if (scrollViewHeight <= 0) {
+            return -1;
+        }
+        int scrollViewCenterOnScreen = scrollViewTopOnScreen + (scrollViewHeight / 2);
+
+        int[] totalLocation = new int[2];
+        customTotalTimeText.getLocationOnScreen(totalLocation);
+        int totalTop = totalLocation[1];
+        int totalBottom = totalTop + Math.max(0, customTotalTimeText.getHeight());
+
+        int[] blockLocation = new int[2];
+        customBlockTimeText.getLocationOnScreen(blockLocation);
+        int blockTop = blockLocation[1];
+        int blockBottom = blockTop + Math.max(0, customBlockTimeText.getHeight());
+
+        int timersTop = Math.min(totalTop, blockTop);
+        int timersBottom = Math.max(totalBottom, blockBottom);
+        int timersCenterOnScreen = (timersTop + timersBottom) / 2;
+
+        int currentScrollY = scrollView.getScrollY();
+        int delta = timersCenterOnScreen - scrollViewCenterOnScreen;
+        int unclampedTarget = currentScrollY + delta;
+
+        View content = scrollView.getChildAt(0);
+        if (content == null) {
+            return Math.max(0, unclampedTarget);
+        }
+        int maxScroll = Math.max(0, content.getHeight() - scrollViewHeight);
+        return Math.max(0, Math.min(unclampedTarget, maxScroll));
     }
     
     /**
      * Sprawdza co 10s czy użytkownik nie przewinął ekranu i wraca do timera
      */
     private void checkAndScrollToTimer() {
-        if (scrollView != null && targetScrollY >= 0) {
-            int currentScrollY = scrollView.getScrollY();
-            // Jeśli użytkownik przewinął więcej niż 100px od celu, wróć do timera
-            if (Math.abs(currentScrollY - targetScrollY) > 100) {
-                scrollView.smoothScrollTo(0, targetScrollY);
-            }
+        if (scrollView == null) {
+            return;
+        }
+        int desiredTarget = computeTargetScrollForCustomTimers();
+        if (desiredTarget < 0) {
+            return;
+        }
+        int currentScrollY = scrollView.getScrollY();
+        targetScrollY = desiredTarget;
+        if (Math.abs(currentScrollY - targetScrollY) > 150) {
+            scrollView.smoothScrollTo(0, targetScrollY);
         }
     }
     
@@ -4099,6 +4189,7 @@ public class MainActivity extends Activity {
     private void finishCustomWorkout() {
         Log.d(TAG, "✅ CUSTOM WORKOUT ZAKOŃCZONY!");
         isCustomWorkoutActive = false;
+        updateKeepScreenOnState();
         
         // Anuluj wszystkie pending callbacks
         handler.removeCallbacksAndMessages(null);
